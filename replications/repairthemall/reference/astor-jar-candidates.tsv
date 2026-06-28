@@ -1,0 +1,14 @@
+# The four revisions of repair_tools/astor.jar in RepairThemAll's history.
+# We pin e902cf5 (see build.env); the others are here so validate-astor-jars can
+# check whether a different jar reproduces the published trajectory better.
+#
+# fetch-astor-jars pulls each from
+#   raw.githubusercontent.com/program-repair/RepairThemAll/<commit>/repair_tools/astor.jar
+# and checks it against the sha256 here. Cached in resources/astor-jars/ (gitignored).
+#
+# Columns: key  date  commit  sha256  astor_classes  note
+# astor_classes = number of fr.inria.* .class files (rough "how different" signal).
+afdd959	2018-10-28	afdd959d9d905d053bbe3709c62625428273aa13	cb3775f5d704d7d7860626c0c2c8b5598cf68760e61200806dd40c55bd123b24	377	oldest; built matias/JDK9, 15.7MB, only 377 Astor classes (vs 853) -- a genuinely older Astor, the one candidate that could move a jGenProg trajectory
+edb42d5	2018-10-29	edb42d5aabfeeffdbc0de677f0a8c8399c94fe90	fe6ec9c067bfb0550e04a4e4a2223ff4da94985335e045c631943beae81e026e	853	nearly identical to e902cf5: only 3 classes differ (ProjectConfiguration, ProjectRepairFacade, AbstractMain -- all setup/config, none on the jGenProg search/RNG path)
+e902cf5	2018-11-04	e902cf54f84a059379d9abfd6159d502963511cc	8ab2a8acc8bf263b62c77b594f0ea1ba8a61469d20b33f27aa76fadf563cf51a	853	PINNED reference -- produced the published results (build.env)
+edcbfc8	2019-01-02	edcbfc8335e3a8931ea4aec07ce3aaf4d93da029	0e48ef9775b87d1fe9c55ebd773d480c025bdb29469498943629c25d680cd28d	853	post-experiment master rebuild; 8 classes differ, mostly Cardumen Cntx* context code + RandomSelection..Ingredient -- affects Cardumen, not jGenProg

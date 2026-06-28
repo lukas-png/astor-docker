@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# validate-astor-jars-nohup [validate-astor-jars args...]
+#
+# Detach scripts/jars/validate-astor-jars into the background (a full jar sweep is
+# bugs x jars x up to maxtime minutes -- hours). Same resumable behaviour: a
+# (jar,bug,mode) whose results-jars/ JSON exists is skipped, so re-running
+# continues where it left off.
+#
+#   scripts/jars/validate-astor-jars-nohup --from-report report.csv
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOGDIR="$REPL_DIR/logs"; mkdir -p "$LOGDIR"
+ts="$(date +%Y%m%d-%H%M%S)"
+log="$LOGDIR/jars-$ts.log"
+pidf="$LOGDIR/jars-$ts.pid"
+
+setsid "$REPL_DIR/scripts/jars/validate-astor-jars" "$@" > "$log" 2>&1 < /dev/null &
+pid=$!
+echo "$pid" > "$pidf"
+
+cat <<EOF
+[validate-astor-jars-nohup] detached, pid $pid
+  log:    $log
+  follow: tail -f "$log"
+  stop:   kill -- -$pid        # stops the sweep and the running container
+  (resumable: re-run this to continue where it left off)
+EOF

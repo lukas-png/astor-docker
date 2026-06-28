@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# fetch-astor-jars [key ...]
+#
+# Fetch and sha256-verify the astor.jar candidate revisions listed in
+# reference/astor-jar-candidates.tsv into resources/astor-jars/ (gitignored cache).
+# With no args, fetches every candidate; otherwise only the given keys.
+#
+# Each jar is streamed from a stable per-commit raw URL and checked against the
+# manifest sha256; a jar already present with the right sha is left untouched.
+# These are NOT vendored/committed (unlike the pinned resources/astor.jar) -- they
+# exist only for the jar-comparison harness (scripts/jars/validate-astor-jars).
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+MANIFEST="$REPL_DIR/reference/astor-jar-candidates.tsv"
+CACHE="$REPL_DIR/resources/astor-jars"
+RAW_BASE="https://raw.githubusercontent.com/program-repair/RepairThemAll"
+
+[ -f "$MANIFEST" ] || { echo "missing manifest: $MANIFEST" >&2; exit 1; }
+mkdir -p "$CACHE"
+
+want=("$@")
+in_want() { [ ${#want[@]} -eq 0 ] && return 0; for w in "${want[@]}"; do [ "$w" = "$1" ] && return 0; done; return 1; }
+
+sha_of() { sha256sum "$1" | cut -d' ' -f1; }
+
+rc=0
+while IFS=$'\t' read -r key date commit sha rest; do
+    case "$key" in ''|\#*) continue ;; esac
+    in_want "$key" || continue
+    dest="$CACHE/astor-$key.jar"
+    if [ -f "$dest" ] && [ "$(sha_of "$dest")" = "$sha" ]; then
+        echo "[ok]    $key  (cached, sha verified)"; continue
+    fi
+    url="$RAW_BASE/$commit/repair_tools/astor.jar"
+    echo "[fetch] $key  <- $url"
+    tmp="$dest.partial"
+    if ! curl -fsSL "$url" -o "$tmp"; then
+        echo "[FAIL]  $key  download failed" >&2; rm -f "$tmp"; rc=1; continue
+    fi
+    got="$(sha_of "$tmp")"
+    if [ "$got" != "$sha" ]; then
+        echo "[FAIL]  $key  sha256 mismatch: got $got want $sha" >&2; rm -f "$tmp"; rc=1; continue
+    fi
+    mv -f "$tmp" "$dest"
+    echo "[done]  $key  -> resources/astor-jars/astor-$key.jar"
+done < "$MANIFEST"
+
+exit $rc

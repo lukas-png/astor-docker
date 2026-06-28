@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""validate-replication [--modes M] [--csv FILE] [--strict] [--show N]
+
+Per-bug check that the local runs reproduce the published reference, at two tiers
+(noise such as timestamps/paths/timing is ignored):
+
+  OUTCOME    : same result (patched vs not), and the same {location, operator,
+               original->patched code} when patched.
+  TRAJECTORY : additionally identical NR_GENERATIONS / NR_RIGHT_COMPILATIONS /
+               NR_FAILLING_COMPILATIONS (deterministic run).
+  EXACT      : report-only. For patched bugs also the modification-point fields
+               (LINE, SUSPICIOUNESS, MP_RANKING, the *_TYPE / INGREDIENT_*
+               fields); for every bug general.OUTPUT_STATUS. Path/timestamp noise
+               is excluded; differences are listed but do not affect the exit code.
+
+Prints match rates + any mismatch, writes a per-bug CSV, exits non-zero if any
+compared bug disagrees on OUTCOME (--strict also fails on not-yet-run bugs).
+Default mode jGenProg; --modes jKali,Cardumen,... or 'all'.
+"""
+import argparse
+import csv
+import json
+import os
+import sys
+
+MODES = ["jGenProg", "jKali", "jMutRepair", "Cardumen"]
+
+
+def norm(s):
+    return None if s is None else " ".join(str(s).split()).rstrip(";").strip()
+
+
+def load(path):
+    try:
+        with open(path) as fd:
+            return json.load(fd)
+    except (IOError, ValueError):
+        return None
+
+
+def patch_set(data):
+    return frozenset((h.get("LOCATION"), h.get("OPERATOR"),
+                      norm(h.get("ORIGINAL_CODE")), norm(h.get("PATCH_HUNK_CODE")))
+                     for p in (data.get("patches") or [])
+                     for h in (p.get("patchhunks") or []))
+
+
+EXACT_FIELDS = ["LOCATION", "OPERATOR", "LINE", "SUSPICIOUNESS", "MP_RANKING",
+                "BUGGY_CODE_TYPE", "PATCH_HUNK_TYPE", "INGREDIENT_SCOPE",
+                "INGREDIENT_PARENT", "ORIGINAL_CODE", "PATCH_HUNK_CODE"]
+CODE_FIELDS = {"ORIGINAL_CODE", "PATCH_HUNK_CODE", "INGREDIENT_PARENT"}
+
+
+def exact_hunks(data):
+    return [{f: (norm(h.get(f)) if f in CODE_FIELDS else h.get(f))
+             for f in EXACT_FIELDS}
+            for p in (data.get("patches") or [])
+            for h in (p.get("patchhunks") or [])]
+
+
+def exact_compare(local, ref):
+    lh, rh = local["exact"], ref["exact"]
+    if len(lh) == 1 and len(rh) == 1:
+        diffs = ["%s local=%r ref=%r" % (f, lh[0].get(f), rh[0].get(f))
+                 for f in EXACT_FIELDS if lh[0].get(f) != rh[0].get(f)]
+        return ("diff", "; ".join(diffs)) if diffs else ("match", "")
+    fs = lambda hs: frozenset(tuple(h.get(f) for f in EXACT_FIELDS) for h in hs)
+    if fs(lh) == fs(rh):
+        return ("match", "")
+    return ("diff", "hunk set differs (%d vs %d hunks)" % (len(lh), len(rh)))
+
+
+def trajectory(data):
+    g = data.get("general")
+    if not g:
+        return None
+    v = (g.get("NR_GENERATIONS"), g.get("NR_RIGHT_COMPILATIONS"), g.get("NR_FAILLING_COMPILATIONS"))
+    return None if any(x is None for x in v) else v
+
+
+def summarize(data):
+    if data is None:
+        return None
+    ps = patch_set(data)
+    return {"patched": len(ps) > 0, "patches": ps, "traj": trajectory(data),
+            "status": (data.get("general") or {}).get("OUTPUT_STATUS"),
+            "exact": exact_hunks(data)}
+
+
+def classify(local, ref):
+    if local is None:
+        return ("MISSING_LOCAL", None, "na", "na", "")
+    if local["patched"] != ref["patched"]:
+        return ("OUTCOME_DIFF", False, "na", "na", "")
+    if local["patched"] and local["patches"] != ref["patches"]:
+        return ("PATCH_DIFF", False, "na", "na", "")
+    exact_state, exact_diff = exact_compare(local, ref)
+    if local.get("status") != ref.get("status"):
+        sd = "OUTPUT_STATUS local=%r ref=%r" % (local.get("status"), ref.get("status"))
+        exact_diff = (exact_diff + "; " + sd) if exact_diff else sd
+        exact_state = "diff"
+    if local["traj"] is None or ref["traj"] is None:
+        klass = "MATCH_OUTCOME" if local["patched"] else "MATCH_NOPATCH"
+        return (klass, True, "na", exact_state, exact_diff)
+    if local["traj"] == ref["traj"]:
+        return ("MATCH_TRAJECTORY", True, "match", exact_state, exact_diff)
+    return ("MATCH_OUTCOME_TRAJ_DIFF", True, "diff", exact_state, exact_diff)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Validate Astor replication vs reference.")
+    ap.add_argument("--modes", default="jGenProg", help="subset of %s, or 'all'" % ",".join(MODES))
+    ap.add_argument("--csv")
+    ap.add_argument("--strict", action="store_true", help="also fail on not-yet-run bugs")
+    ap.add_argument("--show", type=int, default=20)
+    args = ap.parse_args()
+
+    modes = MODES if args.modes == "all" else [m for m in args.modes.split(",") if m]
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ref_root = os.path.join(base, "reference", "Defects4J")
+    res_root = os.path.join(base, "results")
+    if not os.path.isdir(ref_root):
+        sys.exit("no reference (run scripts/reference/sync-reference-results)")
+
+    rows = []
+    for project in sorted(os.listdir(ref_root)):
+        pdir = os.path.join(ref_root, project)
+        if not os.path.isdir(pdir):
+            continue
+        for bug in sorted(os.listdir(pdir), key=lambda x: (len(x), x)):
+            for mode in modes:
+                seed = os.path.join(pdir, bug, mode, "0")
+                ref_data = load(os.path.join(seed, "detailed-result.json")) \
+                    or load(os.path.join(seed, "result.json"))
+                if ref_data is None:
+                    continue
+                ref = summarize(ref_data)
+                local = summarize(load(os.path.join(
+                    res_root, "%s-%s" % (project, bug), mode, "astor_output.json")))
+                klass, outcome_ok, traj, exact_state, exact_diff = classify(local, ref)
+                rows.append({"project": project, "bug": bug, "mode": mode,
+                             "local_present": local is not None,
+                             "ref_patched": ref["patched"],
+                             "local_patched": (local or {}).get("patched"),
+                             "outcome_ok": outcome_ok,
+                             "traj_ref": ref["traj"], "traj_local": (local or {}).get("traj"),
+                             "traj_state": traj, "classification": klass,
+                             "exact_state": exact_state, "exact_diff_fields": exact_diff})
+
+    compared = [r for r in rows if r["local_present"]]
+    omatch = [r for r in compared if r["outcome_ok"]]
+    odiff = [r for r in compared if r["outcome_ok"] is False]
+    tcomp = [r for r in compared if r["traj_state"] in ("match", "diff")]
+    tmatch = [r for r in tcomp if r["traj_state"] == "match"]
+    ecomp = [r for r in compared if r["exact_state"] in ("match", "diff")]
+    ematch = [r for r in ecomp if r["exact_state"] == "match"]
+    missing = [r for r in rows if not r["local_present"]]
+    pct = lambda n, d: "%5.1f%%" % (100.0 * n / d) if d else "  n/a"
+
+    print("== replication validation (Astor / Defects4J) -- modes: %s ==" % ",".join(modes))
+    print("reference pairs: %d | compared: %d | missing locally: %d"
+          % (len(rows), len(compared), len(missing)))
+    print("  OUTCOME    identical: %d/%d  %s   (differ: %d)"
+          % (len(omatch), len(compared), pct(len(omatch), len(compared)), len(odiff)))
+    print("  TRAJECTORY identical: %d/%d  %s   (differ: %d)"
+          % (len(tmatch), len(tcomp), pct(len(tmatch), len(tcomp)), len(tcomp) - len(tmatch)))
+    print("  EXACT      identical: %d/%d  %s   (differ: %d, report-only)"
+          % (len(ematch), len(ecomp), pct(len(ematch), len(ecomp)), len(ecomp) - len(ematch)))
+    counts = {}
+    for r in rows:
+        counts[r["classification"]] = counts.get(r["classification"], 0) + 1
+    for k in sorted(counts):
+        print("    %-26s %d" % (k, counts[k]))
+
+    bad = [r for r in compared if r["classification"] in
+           ("OUTCOME_DIFF", "PATCH_DIFF", "MATCH_OUTCOME_TRAJ_DIFF")]
+    if bad:
+        print("  mismatches (up to %d):" % args.show)
+        for r in bad[:args.show]:
+            extra = ("  local=%s ref=%s" % (r["traj_local"], r["traj_ref"])
+                     if r["classification"] == "MATCH_OUTCOME_TRAJ_DIFF" else "")
+            print("    %-9s %-4s %-10s %s%s" % (r["project"], r["bug"], r["mode"],
+                                                r["classification"], extra))
+
+    ediffs = [r for r in compared if r["exact_state"] == "diff"]
+    if ediffs:
+        print("  EXACT field diffs (report-only, up to %d):" % args.show)
+        for r in ediffs[:args.show]:
+            print("    %-9s %-4s %-10s %s" % (r["project"], r["bug"], r["mode"],
+                                              r["exact_diff_fields"]))
+
+    if args.csv and rows:
+        with open(args.csv, "w", newline="") as fd:
+            w = csv.DictWriter(fd, fieldnames=list(rows[0].keys()))
+            w.writeheader(); w.writerows(rows)
+        print("  csv: %s" % args.csv)
+
+    return 1 if odiff or (args.strict and missing) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

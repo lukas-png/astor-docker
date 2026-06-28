@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# run-batch [options] [<Project>-<BugId> ...]
+#
+# Run Astor over many Defects4J bugs/modes and collect each result. Resumable: a
+# (bug,mode) whose result already exists is skipped (--force re-runs). With no bug
+# args the worklist is every (bug,mode) in reference/, i.e. what the experiment
+# attempted.
+#
+#   --modes m1,m2   subset of jGenProg,jKali,jMutRepair,Cardumen (default jGenProg)
+#   --maxtime N     minutes per run (default 120; lower breaks trajectory fidelity)
+#   --seed N        random seed (default 0)        --image TAG   default astor:1.4.0
+#   --limit N       stop after N runs              --force       re-run existing
+#   --hard-timeout N  wall-clock safety cap in minutes (default 4x maxtime; 0=off).
+#                     A run that exceeds it is recorded as HANG, not FAILED 
+#                     Astor's own -maxtime still applies.
+#   --java-args "S" JVM args for Astor (else image default -Xmx4g -Xms1g)
+#
+set -uo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+MODES="jGenProg"; MAXTIME=120; SEED=0; IMAGE="astor:1.4.0"; LIMIT=0; FORCE=0; BUGS=()
+HARD_TIMEOUT="${HARD_TIMEOUT:-}"; JAVA_ARGS="${JAVA_ARGS:-}"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --modes) MODES="$2"; shift 2 ;; --maxtime) MAXTIME="$2"; shift 2 ;;
+        --seed) SEED="$2"; shift 2 ;;   --image) IMAGE="$2"; shift 2 ;;
+        --limit) LIMIT="$2"; shift 2 ;; --force) FORCE=1; shift ;;
+        --hard-timeout) HARD_TIMEOUT="$2"; shift 2 ;;
+        --java-args) JAVA_ARGS="$2"; shift 2 ;;
+        -h|--help) awk 'NR==1{next} /^#/{print;next} {exit}' "$0"; exit 0 ;;
+        *) BUGS+=("$1"); shift ;;
+    esac
+done
+
+[[ -z "$HARD_TIMEOUT" ]] && HARD_TIMEOUT=$((MAXTIME * 4))
+
+ENGINE="${ENGINE:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
+VOL_SUFFIX="${VOL_SUFFIX-:z}"
+# Rootless podman maps the container user to the host user via --userns=keep-id;
+# rootful docker has no such mode, so use --user to keep work/ host-owned instead.
+if [[ "$ENGINE" == podman ]]; then
+    RUN_OPTS="${RUN_OPTS---userns=keep-id}"
+else
+    RUN_OPTS="${RUN_OPTS---user $(id -u):$(id -g)}"
+fi
+REF="$REPL_DIR/reference/Defects4J"
+LOGDIR="$REPL_DIR/logs"; mkdir -p "$LOGDIR"
+
+astor_mode() {
+    case "$1" in jGenProg) echo jgenprog ;; jKali) echo jkali ;;
+        jMutRepair) echo jMutRepair ;; Cardumen) echo cardumen ;; *) echo "" ;; esac
+}
+IFS=',' read -r -a MODE_LIST <<< "$MODES"
+
+worklist() {
+    if [[ ${#BUGS[@]} -gt 0 ]]; then
+        for bug in "${BUGS[@]}"; do
+            for m in "${MODE_LIST[@]}"; do echo "${bug%%-*} ${bug##*-} $m"; done
+        done
+    else
+        for m in "${MODE_LIST[@]}"; do
+            find "$REF" -mindepth 3 -maxdepth 3 -type d -name "$m" 2>/dev/null \
+              | sed -E "s#^$REF/([^/]+)/([^/]+)/$m\$#\1 \2 $m#"
+        done
+    fi
+}
+
+mapfile -t WORK < <(worklist | sort -k1,1 -k2,2n -k3,3)
+total=${#WORK[@]}
+ran=0 skipped=0 ok=0 nopatch=0 failed=0 hung=0
+wall_note="hard-timeout=${HARD_TIMEOUT}min"; [[ "$HARD_TIMEOUT" -eq 0 ]] && wall_note="hard-timeout=off"
+echo "[run-batch] $ENGINE $IMAGE | modes=$MODES maxtime=${MAXTIME}min $wall_note seed=$SEED | $total pairs"
+
+for line in "${WORK[@]}"; do
+    read -r PID BID MODEDIR <<< "$line"
+    BUG="$PID-$BID"; amode="$(astor_mode "$MODEDIR")"
+    [[ -z "$amode" ]] && continue
+    dest="$REPL_DIR/results/$BUG/$MODEDIR/astor_output.json"
+    if [[ -f "$dest" && "$FORCE" -ne 1 ]]; then skipped=$((skipped+1)); continue; fi
+    [[ "$LIMIT" -gt 0 && "$ran" -ge "$LIMIT" ]] && break
+
+    printf "[%d/%d] %-14s %-10s ... " "$((ran+skipped+1))" "$total" "$BUG" "$MODEDIR"
+    stale=("$REPL_DIR/work/$PID/$BID" "$REPL_DIR/work/$PID/${BID}-astor.log")
+    if [[ "$ENGINE" == podman ]]; then
+        "$ENGINE" unshare rm -rf "${stale[@]}" 2>/dev/null || rm -rf "${stale[@]}" 2>/dev/null
+    else
+        rm -rf "${stale[@]}" 2>/dev/null
+    fi
+
+    blog="$LOGDIR/${BUG}-${MODEDIR}.log"
+    ENVS=(-e MODE="$amode" -e MAXTIME="$MAXTIME" -e SEED="$SEED")
+    [[ -n "$JAVA_ARGS" ]] && ENVS+=(-e JAVA_ARGS="$JAVA_ARGS")
+    run_cmd=("$ENGINE" run --rm $RUN_OPTS "${ENVS[@]}" \
+             -v "$REPL_DIR/work:/work${VOL_SUFFIX}" "$IMAGE" run-astor "$BUG")
+    if [[ "$HARD_TIMEOUT" -gt 0 ]]; then
+        timeout "${HARD_TIMEOUT}m" "${run_cmd[@]}" > "$blog" 2>&1
+    else
+        "${run_cmd[@]}" > "$blog" 2>&1
+    fi
+    rc=$?; ran=$((ran+1))
+
+    if [[ "$HARD_TIMEOUT" -gt 0 && "$rc" -eq 124 ]]; then
+        echo "HANG (>${HARD_TIMEOUT}min wall, see logs/${BUG}-${MODEDIR}.log)"; hung=$((hung+1))
+    elif [[ $rc -eq 0 ]] && "$REPL_DIR/scripts/run/collect-results" "$BUG" "$amode" >/dev/null 2>&1; then
+        npatch="$(jq -r '.patches | length' "$dest" 2>/dev/null || echo 0)"
+        if [[ "${npatch:-0}" -gt 0 ]]; then echo "patched"; ok=$((ok+1))
+        else echo "no patch"; nopatch=$((nopatch+1)); fi
+    else
+        echo "FAILED (rc=$rc, see logs/${BUG}-${MODEDIR}.log)"; failed=$((failed+1))
+    fi
+done
+
+echo "[run-batch] ran=$ran (patched=$ok no-patch=$nopatch failed=$failed hang=$hung) skipped=$skipped"
+echo "[run-batch] validate: scripts/validate/validate-replication --modes $MODES"

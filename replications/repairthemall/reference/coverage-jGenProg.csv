@@ -1,0 +1,396 @@
+project,bug,has_result,upstream_status,upstream_reason
+Chart,1,1,STOP_BY_PATCH_FOUND,
+Chart,2,1,TIME_OUT,
+Chart,3,1,STOP_BY_PATCH_FOUND,
+Chart,4,1,TIME_OUT,
+Chart,5,1,STOP_BY_PATCH_FOUND,
+Chart,6,1,TIME_OUT,
+Chart,7,1,STOP_BY_PATCH_FOUND,
+Chart,8,1,TIME_OUT,
+Chart,9,1,TIME_OUT,
+Chart,10,1,TIME_OUT,
+Chart,11,1,TIME_OUT,
+Chart,12,1,TIME_OUT,
+Chart,13,1,STOP_BY_PATCH_FOUND,
+Chart,14,1,TIME_OUT,
+Chart,15,1,STOP_BY_PATCH_FOUND,
+Chart,16,1,TIME_OUT,
+Chart,17,1,TIME_OUT,
+Chart,18,1,TIME_OUT,
+Chart,19,1,TIME_OUT,
+Chart,20,1,TIME_OUT,
+Chart,21,1,TIME_OUT,
+Chart,22,1,TIME_OUT,
+Chart,23,1,TIME_OUT,
+Chart,24,1,TIME_OUT,
+Chart,25,1,STOP_BY_PATCH_FOUND,
+Chart,26,1,TIME_OUT,
+Closure,1,0,KILLED_GRID,OAR job killed (walltime)
+Closure,2,0,KILLED_GRID,OAR job killed (walltime)
+Closure,3,0,KILLED_GRID,OAR job killed (walltime)
+Closure,4,0,KILLED_GRID,OAR job killed (walltime)
+Closure,5,1,ERROR,
+Closure,6,0,KILLED_GRID,OAR job killed (walltime)
+Closure,7,0,KILLED_GRID,OAR job killed (walltime)
+Closure,8,0,KILLED_GRID,OAR job killed (walltime)
+Closure,9,0,KILLED_GRID,OAR job killed (walltime)
+Closure,10,0,KILLED_GRID,OAR job killed (walltime)
+Closure,11,0,KILLED_GRID,OAR job killed (walltime)
+Closure,12,0,KILLED_GRID,OAR job killed (walltime)
+Closure,13,0,KILLED_GRID,OAR job killed (walltime)
+Closure,14,0,KILLED_GRID,OAR job killed (walltime)
+Closure,15,0,KILLED_GRID,OAR job killed (walltime)
+Closure,16,0,KILLED_GRID,OAR job killed (walltime)
+Closure,17,0,KILLED_GRID,OAR job killed (walltime)
+Closure,18,0,KILLED_GRID,OAR job killed (walltime)
+Closure,19,0,KILLED_GRID,OAR job killed (walltime)
+Closure,20,0,KILLED_GRID,OAR job killed (walltime)
+Closure,21,1,STOP_BY_PATCH_FOUND,
+Closure,22,1,STOP_BY_PATCH_FOUND,
+Closure,23,0,KILLED_GRID,OAR job killed (walltime)
+Closure,24,0,KILLED_GRID,OAR job killed (walltime)
+Closure,25,0,KILLED_GRID,OAR job killed (walltime)
+Closure,26,0,KILLED_GRID,OAR job killed (walltime)
+Closure,27,0,KILLED_GRID,OAR job killed (walltime)
+Closure,28,0,KILLED_GRID,OAR job killed (walltime)
+Closure,29,1,ERROR,
+Closure,30,1,ERROR,
+Closure,31,0,KILLED_GRID,OAR job killed (walltime)
+Closure,32,0,KILLED_GRID,OAR job killed (walltime)
+Closure,33,0,KILLED_GRID,OAR job killed (walltime)
+Closure,34,0,KILLED_GRID,OAR job killed (walltime)
+Closure,35,0,KILLED_GRID,OAR job killed (walltime)
+Closure,36,0,KILLED_GRID,OAR job killed (walltime)
+Closure,37,0,KILLED_GRID,OAR job killed (walltime)
+Closure,38,0,KILLED_GRID,OAR job killed (walltime)
+Closure,39,0,KILLED_GRID,OAR job killed (walltime)
+Closure,40,0,KILLED_GRID,OAR job killed (walltime)
+Closure,41,0,INITIAL_TESTS_FAIL,Astor: initial test suite run failed
+Closure,42,0,KILLED_GRID,OAR job killed (walltime)
+Closure,43,0,KILLED_GRID,OAR job killed (walltime)
+Closure,44,0,KILLED_GRID,OAR job killed (walltime)
+Closure,45,0,KILLED_GRID,OAR job killed (walltime)
+Closure,46,0,KILLED_GRID,OAR job killed (walltime)
+Closure,47,0,KILLED_GRID,OAR job killed (walltime)
+Closure,48,0,KILLED_GRID,OAR job killed (walltime)
+Closure,49,0,KILLED_GRID,OAR job killed (walltime)
+Closure,50,0,KILLED_GRID,OAR job killed (walltime)
+Closure,51,0,KILLED_GRID,OAR job killed (walltime)
+Closure,52,0,KILLED_GRID,OAR job killed (walltime)
+Closure,53,1,ERROR,
+Closure,54,0,KILLED_GRID,OAR job killed (walltime)
+Closure,55,0,KILLED_GRID,OAR job killed (walltime)
+Closure,56,0,KILLED_GRID,OAR job killed (walltime)
+Closure,57,0,KILLED_GRID,OAR job killed (walltime)
+Closure,58,0,KILLED_GRID,OAR job killed (walltime)
+Closure,59,0,KILLED_GRID,OAR job killed (walltime)
+Closure,60,0,TRUNCATED,log ends without terminal marker: ---- Initial suspicious size: 610
+Closure,61,0,KILLED_GRID,OAR job killed (walltime)
+Closure,62,0,KILLED_GRID,OAR job killed (walltime)
+Closure,63,0,KILLED_GRID,OAR job killed (walltime)
+Closure,64,0,KILLED_GRID,OAR job killed (walltime)
+Closure,65,0,KILLED_GRID,OAR job killed (walltime)
+Closure,66,0,KILLED_GRID,OAR job killed (walltime)
+Closure,67,0,KILLED_GRID,OAR job killed (walltime)
+Closure,68,0,KILLED_GRID,OAR job killed (walltime)
+Closure,69,0,KILLED_GRID,OAR job killed (walltime)
+Closure,70,0,KILLED_GRID,OAR job killed (walltime)
+Closure,71,0,KILLED_GRID,OAR job killed (walltime)
+Closure,72,0,KILLED_GRID,OAR job killed (walltime)
+Closure,73,0,KILLED_GRID,OAR job killed (walltime)
+Closure,74,0,KILLED_GRID,OAR job killed (walltime)
+Closure,75,0,KILLED_GRID,OAR job killed (walltime)
+Closure,76,0,KILLED_GRID,OAR job killed (walltime)
+Closure,77,0,KILLED_GRID,OAR job killed (walltime)
+Closure,78,0,KILLED_GRID,OAR job killed (walltime)
+Closure,79,1,TIME_OUT,
+Closure,80,1,TIME_OUT,
+Closure,81,1,TIME_OUT,
+Closure,82,1,TIME_OUT,
+Closure,83,1,TIME_OUT,
+Closure,84,1,TIME_OUT,
+Closure,85,1,TIME_OUT,
+Closure,86,1,TIME_OUT,
+Closure,87,1,TIME_OUT,
+Closure,88,1,TIME_OUT,
+Closure,89,1,TIME_OUT,
+Closure,90,1,TIME_OUT,
+Closure,91,1,TIME_OUT,
+Closure,92,1,TIME_OUT,
+Closure,93,1,TIME_OUT,
+Closure,94,1,TIME_OUT,
+Closure,95,1,TIME_OUT,
+Closure,96,1,TIME_OUT,
+Closure,97,1,TIME_OUT,
+Closure,98,1,TIME_OUT,
+Closure,99,1,TIME_OUT,
+Closure,100,1,TIME_OUT,
+Closure,101,1,TIME_OUT,
+Closure,102,1,TIME_OUT,
+Closure,103,1,TIME_OUT,
+Closure,104,1,TIME_OUT,
+Closure,105,1,TIME_OUT,
+Closure,106,1,TIME_OUT,
+Closure,107,0,KILLED_GRID,OAR job killed (walltime)
+Closure,108,0,KILLED_GRID,OAR job killed (walltime)
+Closure,109,0,KILLED_GRID,OAR job killed (walltime)
+Closure,110,0,KILLED_GRID,OAR job killed (walltime)
+Closure,111,0,KILLED_GRID,OAR job killed (walltime)
+Closure,112,0,INITIAL_TESTS_FAIL,Astor: initial test suite run failed
+Closure,113,0,KILLED_GRID,OAR job killed (walltime)
+Closure,114,0,KILLED_GRID,OAR job killed (walltime)
+Closure,115,1,STOP_BY_PATCH_FOUND,
+Closure,116,0,KILLED_GRID,OAR job killed (walltime)
+Closure,117,0,INITIAL_TESTS_FAIL,Astor: initial test suite run failed
+Closure,118,0,KILLED_GRID,OAR job killed (walltime)
+Closure,119,0,KILLED_GRID,OAR job killed (walltime)
+Closure,120,0,KILLED_GRID,OAR job killed (walltime)
+Closure,121,0,KILLED_GRID,OAR job killed (walltime)
+Closure,122,0,KILLED_GRID,OAR job killed (walltime)
+Closure,123,0,KILLED_GRID,OAR job killed (walltime)
+Closure,124,0,KILLED_GRID,OAR job killed (walltime)
+Closure,125,0,KILLED_GRID,OAR job killed (walltime)
+Closure,126,1,STOP_BY_PATCH_FOUND,
+Closure,127,0,KILLED_GRID,OAR job killed (walltime)
+Closure,128,0,KILLED_GRID,OAR job killed (walltime)
+Closure,129,0,KILLED_GRID,OAR job killed (walltime)
+Closure,130,0,KILLED_GRID,OAR job killed (walltime)
+Closure,131,0,KILLED_GRID,OAR job killed (walltime)
+Closure,132,0,KILLED_GRID,OAR job killed (walltime)
+Closure,133,0,KILLED_GRID,OAR job killed (walltime)
+Lang,1,1,TIME_OUT,
+Lang,2,1,TIME_OUT,
+Lang,3,1,TIME_OUT,
+Lang,4,1,TIME_OUT,
+Lang,5,1,TIME_OUT,
+Lang,6,1,TIME_OUT,
+Lang,7,1,TIME_OUT,
+Lang,8,1,TIME_OUT,
+Lang,9,1,TIME_OUT,
+Lang,10,1,TIME_OUT,
+Lang,11,1,TIME_OUT,
+Lang,12,1,TIME_OUT,
+Lang,13,1,TIME_OUT,
+Lang,14,1,TIME_OUT,
+Lang,15,1,TIME_OUT,
+Lang,16,1,TIME_OUT,
+Lang,17,1,TIME_OUT,
+Lang,18,1,TIME_OUT,
+Lang,19,1,TIME_OUT,
+Lang,20,1,TIME_OUT,
+Lang,21,1,ERROR,
+Lang,22,1,TIME_OUT,
+Lang,23,1,ERROR,
+Lang,24,1,ERROR,
+Lang,25,1,ERROR,
+Lang,26,1,ERROR,
+Lang,27,1,ERROR,
+Lang,28,1,ERROR,
+Lang,29,1,ERROR,
+Lang,30,1,TIME_OUT,
+Lang,31,1,TIME_OUT,
+Lang,32,1,ERROR,
+Lang,33,1,ERROR,
+Lang,34,1,ERROR,
+Lang,35,1,ERROR,
+Lang,36,1,ERROR,
+Lang,37,1,TIME_OUT,
+Lang,38,1,TIME_OUT,
+Lang,39,1,TIME_OUT,
+Lang,40,1,TIME_OUT,
+Lang,41,1,TIME_OUT,
+Lang,42,1,TIME_OUT,
+Lang,43,1,TIME_OUT,
+Lang,44,1,TIME_OUT,
+Lang,45,1,TIME_OUT,
+Lang,46,1,TIME_OUT,
+Lang,47,1,TIME_OUT,
+Lang,48,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,49,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,50,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,51,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,52,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,53,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,54,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,55,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,56,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,57,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,58,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,59,0,CRASH,spoon.compiler.ModelBuildingException
+Lang,60,1,TIME_OUT,
+Lang,61,1,TIME_OUT,
+Lang,62,1,TIME_OUT,
+Lang,63,1,TIME_OUT,
+Lang,64,1,TIME_OUT,
+Lang,65,1,TIME_OUT,
+Math,1,1,TIME_OUT,
+Math,2,1,STOP_BY_PATCH_FOUND,
+Math,3,1,TIME_OUT,
+Math,4,0,KILLED_GRID,OAR job killed (walltime)
+Math,5,1,STOP_BY_PATCH_FOUND,
+Math,6,0,KILLED_GRID,OAR job killed (walltime)
+Math,7,1,ERROR,
+Math,8,1,STOP_BY_PATCH_FOUND,
+Math,9,0,KILLED_GRID,OAR job killed (walltime)
+Math,10,0,KILLED_GRID,OAR job killed (walltime)
+Math,11,0,KILLED_GRID,OAR job killed (walltime)
+Math,12,0,KILLED_GRID,OAR job killed (walltime)
+Math,13,0,KILLED_GRID,OAR job killed (walltime)
+Math,14,0,KILLED_GRID,OAR job killed (walltime)
+Math,15,0,INITIAL_TESTS_FAIL,Astor: initial test suite run failed
+Math,16,0,KILLED_GRID,OAR job killed (walltime)
+Math,17,0,TRUNCATED,log ends without terminal marker: Date: Sat Dec  1 18:51:20 EST 2018
+Math,18,1,ERROR,
+Math,19,1,ERROR,
+Math,20,1,STOP_BY_PATCH_FOUND,
+Math,21,1,ERROR,
+Math,22,1,TIME_OUT,
+Math,23,1,TIME_OUT,
+Math,24,0,KILLED_GRID,OAR job killed (walltime)
+Math,25,0,KILLED_GRID,OAR job killed (walltime)
+Math,26,0,KILLED_GRID,OAR job killed (walltime)
+Math,27,1,TIME_OUT,
+Math,28,1,STOP_BY_PATCH_FOUND,
+Math,29,0,KILLED_GRID,OAR job killed (walltime)
+Math,30,0,KILLED_GRID,OAR job killed (walltime)
+Math,31,1,TIME_OUT,
+Math,32,0,KILLED_GRID,OAR job killed (walltime)
+Math,33,0,KILLED_GRID,OAR job killed (walltime)
+Math,34,1,TIME_OUT,
+Math,35,0,KILLED_GRID,OAR job killed (walltime)
+Math,36,1,TIME_OUT,
+Math,37,0,KILLED_GRID,OAR job killed (walltime)
+Math,38,0,KILLED_GRID,OAR job killed (walltime)
+Math,39,0,KILLED_GRID,OAR job killed (walltime)
+Math,40,1,STOP_BY_PATCH_FOUND,
+Math,41,1,ERROR,
+Math,42,1,TIME_OUT,
+Math,43,1,ERROR,
+Math,44,1,ERROR,
+Math,45,0,KILLED_GRID,OAR job killed (walltime)
+Math,46,1,TIME_OUT,
+Math,47,1,TIME_OUT,
+Math,48,1,TIME_OUT,
+Math,49,1,STOP_BY_PATCH_FOUND,
+Math,50,1,STOP_BY_PATCH_FOUND,
+Math,51,1,TIME_OUT,
+Math,52,1,TIME_OUT,
+Math,53,1,STOP_BY_PATCH_FOUND,
+Math,54,1,TIME_OUT,
+Math,55,1,TIME_OUT,
+Math,56,1,STOP_BY_PATCH_FOUND,
+Math,57,1,ERROR,
+Math,58,1,TIME_OUT,
+Math,59,0,INITIAL_TESTS_FAIL,Astor: initial test suite run failed
+Math,60,1,STOP_BY_PATCH_FOUND,
+Math,61,1,TIME_OUT,
+Math,62,1,TIME_OUT,
+Math,63,1,TIME_OUT,
+Math,64,1,STOP_BY_PATCH_FOUND,
+Math,65,1,TIME_OUT,
+Math,66,1,ERROR,
+Math,67,1,TIME_OUT,
+Math,68,1,TIME_OUT,
+Math,69,1,ERROR,
+Math,70,1,STOP_BY_PATCH_FOUND,
+Math,71,1,ERROR,
+Math,72,1,TIME_OUT,
+Math,73,1,STOP_BY_PATCH_FOUND,
+Math,74,1,ERROR,
+Math,75,1,TIME_OUT,
+Math,76,1,ERROR,
+Math,77,1,TIME_OUT,
+Math,78,1,ERROR,
+Math,79,1,ERROR,
+Math,80,1,STOP_BY_PATCH_FOUND,
+Math,81,1,STOP_BY_PATCH_FOUND,
+Math,82,1,STOP_BY_PATCH_FOUND,
+Math,83,1,TIME_OUT,
+Math,84,1,STOP_BY_PATCH_FOUND,
+Math,85,1,STOP_BY_PATCH_FOUND,
+Math,86,1,ERROR,
+Math,87,1,TIME_OUT,
+Math,88,1,TIME_OUT,
+Math,89,1,TIME_OUT,
+Math,90,1,TIME_OUT,
+Math,91,1,TIME_OUT,
+Math,92,1,TIME_OUT,
+Math,93,1,TIME_OUT,
+Math,94,1,TIME_OUT,
+Math,95,1,STOP_BY_PATCH_FOUND,
+Math,96,1,TIME_OUT,
+Math,97,1,TIME_OUT,
+Math,98,1,TIME_OUT,
+Math,99,1,TIME_OUT,
+Math,100,1,TIME_OUT,
+Math,101,1,TIME_OUT,
+Math,102,1,TIME_OUT,
+Math,103,1,TIME_OUT,
+Math,104,1,TIME_OUT,
+Math,105,1,TIME_OUT,
+Math,106,1,TIME_OUT,
+Mockito,1,0,CRASH,NullPointerException
+Mockito,2,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,3,0,CRASH,NullPointerException
+Mockito,4,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,5,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,6,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,7,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,8,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,9,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,10,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,11,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,12,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,13,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,14,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,15,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,16,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,17,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,18,0,CRASH,NullPointerException
+Mockito,19,0,CRASH,NullPointerException
+Mockito,20,0,CRASH,NullPointerException
+Mockito,21,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,22,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,23,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,24,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,25,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,26,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,27,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,28,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,29,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,30,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,31,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,32,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,33,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,34,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,35,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,36,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,37,0,CRASH,spoon.compiler.ModelBuildingException
+Mockito,38,0,CRASH,spoon.compiler.ModelBuildingException
+Time,1,0,KILLED_GRID,OAR job killed (walltime)
+Time,2,0,KILLED_GRID,OAR job killed (walltime)
+Time,3,0,KILLED_GRID,OAR job killed (walltime)
+Time,4,0,KILLED_GRID,OAR job killed (walltime)
+Time,5,0,KILLED_GRID,OAR job killed (walltime)
+Time,6,0,KILLED_GRID,OAR job killed (walltime)
+Time,7,0,KILLED_GRID,OAR job killed (walltime)
+Time,8,0,KILLED_GRID,OAR job killed (walltime)
+Time,9,0,KILLED_GRID,OAR job killed (walltime)
+Time,10,0,KILLED_GRID,OAR job killed (walltime)
+Time,11,0,KILLED_GRID,OAR job killed (walltime)
+Time,12,0,KILLED_GRID,OAR job killed (walltime)
+Time,13,0,KILLED_GRID,OAR job killed (walltime)
+Time,14,0,KILLED_GRID,OAR job killed (walltime)
+Time,15,0,KILLED_GRID,OAR job killed (walltime)
+Time,16,0,KILLED_GRID,OAR job killed (walltime)
+Time,17,0,KILLED_GRID,OAR job killed (walltime)
+Time,18,0,KILLED_GRID,OAR job killed (walltime)
+Time,19,0,KILLED_GRID,OAR job killed (walltime)
+Time,20,0,KILLED_GRID,OAR job killed (walltime)
+Time,21,0,KILLED_GRID,OAR job killed (walltime)
+Time,22,0,KILLED_GRID,OAR job killed (walltime)
+Time,23,0,KILLED_GRID,OAR job killed (walltime)
+Time,24,0,KILLED_GRID,OAR job killed (walltime)
+Time,25,0,KILLED_GRID,OAR job killed (walltime)
+Time,26,0,KILLED_GRID,OAR job killed (walltime)
+Time,27,0,KILLED_GRID,OAR job killed (walltime)

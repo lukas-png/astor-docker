@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# audit-upstream-coverage
+#
+# Establishes, per Defects4J jGenProg bug, what the published RepairThemAll
+# experiment actually produced -- so the replication's out-of-scope set is
+# evidence-backed rather than inferred. sync-reference-results keeps only the
+# result JSONs; this additionally fetches the logs it skips (repair.log,
+# grid5k.stderr.log) for bugs that have NO result.json, reads the terminal
+# outcome from them, and writes reference/coverage-jGenProg.csv (committed).
+#
+# The upstream tree stores, per <Project>/<Bug>/jGenProg/0/:
+#   result.json + detailed-result.json  only when a parseable result was produced
+#   repair.log                          Astor's own run log (always)
+#   grid5k.stderr.log                   the OAR grid job's stderr (always)
+# so "no result.json" means the run was attempted but produced no result; the
+# logs say why (OAR walltime kill, Spoon crash, failed initial test run, ...).
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO="https://github.com/program-repair/RepairThemAll_experiment.git"
+COMMIT="a59cd3c85864a5f21dc6bc1e71920abbdc9379fd"
+MODE="jGenProg"
+OUT="$REPL_DIR/reference/coverage-${MODE}.csv"
+
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+git clone --quiet --filter=blob:none --no-checkout "$REPO" "$tmp/exp"
+cd "$tmp/exp"
+
+# Inventory is offline: blobless clone has all trees, only blobs are absent.
+git ls-tree -r --name-only "$COMMIT" "results/Defects4J/" \
+  | grep -E "/$MODE/0/" > "$tmp/files.txt"
+sed -nE "s#results/Defects4J/([^/]+)/([^/]+)/$MODE/0/result\.json#\1 \2#p" \
+  "$tmp/files.txt" | sort -u > "$tmp/have_result.txt"
+sed -nE "s#results/Defects4J/([^/]+)/([^/]+)/$MODE/0/repair\.log#\1 \2#p" \
+  "$tmp/files.txt" | sort -u > "$tmp/all_bugs.txt"
+comm -23 "$tmp/all_bugs.txt" "$tmp/have_result.txt" > "$tmp/missing.txt"
+
+# Fetch only the logs of the bugs that lack a result (patterns set BEFORE
+# checkout, so only these blobs are pulled -- not the whole tree).
+: > "$tmp/patterns.txt"
+while read -r P B; do
+    echo "results/Defects4J/$P/$B/$MODE/0/repair.log" >> "$tmp/patterns.txt"
+    echo "results/Defects4J/$P/$B/$MODE/0/grid5k.stderr.log" >> "$tmp/patterns.txt"
+done < "$tmp/missing.txt"
+git sparse-checkout init --no-cone >/dev/null
+git sparse-checkout set --no-cone --stdin < "$tmp/patterns.txt" >/dev/null
+git -c advice.detachedHead=false checkout --quiet "$COMMIT"
+
+REF_ROOT="$REPL_DIR/reference/Defects4J" EXP_ROOT="$tmp/exp/results/Defects4J" \
+ALL_BUGS="$tmp/all_bugs.txt" MODE="$MODE" OUT="$OUT" python3 - <<'PY'
+import csv, json, os
+
+ref_root = os.environ["REF_ROOT"]
+exp_root = os.environ["EXP_ROOT"]
+all_bugs = os.environ["ALL_BUGS"]   # every attempted bug: "<Project> <Bug>" per line
+mode = os.environ["MODE"]
+out = os.environ["OUT"]
+
+
+def read(path):
+    try:
+        with open(path, errors="replace") as fd:
+            return fd.read()
+    except IOError:
+        return ""
+
+
+def upstream_from_logs(pdir):
+    """Terminal outcome for a bug that has no result.json, read from its logs."""
+    stderr = read(os.path.join(pdir, "grid5k.stderr.log"))
+    repair = read(os.path.join(pdir, "repair.log"))
+    if "OAR" in stderr and "KILLED" in stderr:
+        return "KILLED_GRID", "OAR job killed (walltime)"
+    if "ModelBuildingException" in repair:
+        return "CRASH", "spoon.compiler.ModelBuildingException"
+    if "NullPointerException" in repair:
+        return "CRASH", "NullPointerException"
+    if "Initial run of test suite fails" in repair:
+        return "INITIAL_TESTS_FAIL", "Astor: initial test suite run failed"
+    last = next((ln for ln in reversed(repair.splitlines()) if ln.strip()), "")
+    return "TRUNCATED", "log ends without terminal marker: " + last[:60]
+
+
+rows = []
+# Iterate every bug the experiment attempted (one line per bug in all_bugs.txt).
+for line in open(all_bugs):
+    project, bug = line.split()
+    pdir = os.path.join(exp_root, project, bug, mode, "0")
+    # has_result is authoritative from the committed reference JSONs.
+    rjson = os.path.join(ref_root, project, bug, mode, "0", "detailed-result.json")
+    rjson2 = os.path.join(ref_root, project, bug, mode, "0", "result.json")
+    has_result = os.path.isfile(rjson) or os.path.isfile(rjson2)
+    if has_result:
+        data = json.load(open(rjson if os.path.isfile(rjson) else rjson2))
+        status = (data.get("general") or {}).get("OUTPUT_STATUS") or "RESULT"
+        reason = ""
+    else:
+        status, reason = upstream_from_logs(pdir)
+    rows.append({"project": project, "bug": bug,
+                 "has_result": int(bool(has_result)),
+                 "upstream_status": status, "upstream_reason": reason})
+
+rows.sort(key=lambda r: (r["project"], len(r["bug"]), r["bug"]))
+with open(out, "w", newline="") as fd:
+    w = csv.DictWriter(fd, fieldnames=["project", "bug", "has_result",
+                                       "upstream_status", "upstream_reason"])
+    w.writeheader()
+    w.writerows(rows)
+
+n = len(rows)
+have = sum(r["has_result"] for r in rows)
+by = {}
+for r in rows:
+    by[r["upstream_status"]] = by.get(r["upstream_status"], 0) + 1
+print("wrote %s  (%d bugs: %d with result, %d without)" % (out, n, have, n - have))
+for k in sorted(by):
+    print("  %-20s %d" % (k, by[k]))
+PY

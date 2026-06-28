@@ -1,0 +1,20 @@
+# Large downloads fetched on demand (the vendored jars/tsv ARE committed).
+replications/*/resources/*.tar.gz
+replications/*/resources/*.partial
+
+# Candidate astor.jar revisions for the jar-comparison harness: fetched + sha-
+# verified on demand from RepairThemAll (reference/astor-jar-candidates.tsv), not
+# vendored. The pinned resources/astor.jar IS committed and is not matched here.
+replications/*/resources/astor-jars/
+
+# Per-replication scratch: container working copies and batch logs.
+replications/*/work/*
+!replications/*/work/.gitkeep
+replications/*/logs/
+# Per-jar container scratch for scripts/validate-astor-jars.
+replications/*/work-jars/
+
+__pycache__
+
+# Local spreadsheet exports / ad-hoc analysis scratch (not part of the package).
+*.xlsx

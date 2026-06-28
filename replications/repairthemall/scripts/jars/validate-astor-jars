@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""validate-astor-jars [options]
+
+Compare astor.jar *revisions* against the published reference, to answer: does an
+older (or the later master) jar reproduce the published search TRAJECTORY better
+than the pinned e902cf5? The replication's pin is unchanged -- this only runs
+candidate jars side by side and scores them.
+
+The candidates come from reference/astor-jar-candidates.tsv (fetched + sha-verified
+by scripts/jars/fetch-astor-jars). Each candidate is run on the SAME bugs/modes/seed as
+the reference, its jar mounted read-only over the image's baked-in one via ASTOR_JAR.
+Results are archived under results-jars/<key>/ and scored
+with the SAME OUTCOME/TRAJECTORY definitions as scripts/validate/validate-replication.
+
+
+  # target exactly the trajectory-mismatch bugs from a validate-replication run:
+  scripts/validate/validate-replication --csv report.csv
+  scripts/jars/validate-astor-jars --from-report report.csv
+
+  # or name them:
+  scripts/jars/validate-astor-jars --bugs Math-70,Lang-6 --jars afdd959,e902cf5
+
+  # compare already-collected results without running anything:
+  scripts/jars/validate-astor-jars --bugs Math-70 --no-run
+
+Options:
+  --jars K1,K2,...    candidate keys (default: all in the manifest)
+  --modes M           default jGenProg (comma list, or 'all')
+  --bugs B1,B2,...    explicit bugs (Project-BugId)
+  --from-report FILE  take bugs from a validate-replication CSV: those classified
+                      MATCH_OUTCOME_TRAJ_DIFF (add --include-patch-diff for PATCH_DIFF)
+  --include-patch-diff  with --from-report, also include PATCH_DIFF bugs
+  --maxtime N         minutes per run (default 120; lower breaks trajectory fidelity)
+  --seed N            default 0        --image TAG   default astor:1.4.0
+  --no-run            score existing results-jars/ only; run nothing
+  --force             re-run even if a results-jars JSON already exists
+  --hard-timeout N    wall-clock cap in minutes (default 4x maxtime; 0=off)
+  --csv FILE          per-bug/per-jar matrix CSV path (default results-jars/comparison.csv)
+  --no-csv            do not write the CSV
+"""
+import argparse
+import csv
+import importlib.machinery
+import importlib.util
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+
+MODES = ["jGenProg", "jKali", "jMutRepair", "Cardumen"]
+ASTOR_MODE = {"jGenProg": "jgenprog", "jKali": "jkali",
+              "jMutRepair": "jMutRepair", "Cardumen": "cardumen"}
+
+BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRIPTS = os.path.join(BASE, "scripts", "validate")
+
+
+def _load_validator():
+    """Import scripts/validate/validate-replication (hyphenated, no .py) for its shared
+    summarize()/classify()/trajectory() so scoring stays identical to the CI gate."""
+    path = os.path.join(SCRIPTS, "validate-replication")
+    loader = importlib.machinery.SourceFileLoader("validate_replication", path)
+    spec = importlib.util.spec_from_loader("validate_replication", loader)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+VR = _load_validator()
+
+
+def read_manifest():
+    """key -> (commit, sha, note) from reference/astor-jar-candidates.tsv (in order)."""
+    path = os.path.join(BASE, "reference", "astor-jar-candidates.tsv")
+    out = []
+    with open(path) as fd:
+        for line in fd:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            key, _date, commit, sha = parts[0], parts[1], parts[2], parts[3]
+            note = parts[5] if len(parts) > 5 else ""
+            out.append((key, commit, sha, note))
+    return out
+
+
+def bugs_from_report(path, modes, include_patch_diff):
+    wanted = {"MATCH_OUTCOME_TRAJ_DIFF"}
+    if include_patch_diff:
+        wanted.add("PATCH_DIFF")
+    bugs = []
+    seen = set()
+    with open(path) as fd:
+        for r in csv.DictReader(fd):
+            if r.get("mode") not in modes:
+                continue
+            if r.get("classification") in wanted:
+                b = "%s-%s" % (r["project"], r["bug"])
+                if b not in seen:
+                    seen.add(b); bugs.append(b)
+    return bugs
+
+
+def ref_summary(project, bug, mode):
+    seed = os.path.join(BASE, "reference", "Defects4J", project, bug, mode, "0")
+    data = VR.load(os.path.join(seed, "detailed-result.json")) \
+        or VR.load(os.path.join(seed, "result.json"))
+    return VR.summarize(data) if data else None
+
+
+def local_summary(jar_key, bug, mode):
+    p = os.path.join(BASE, "results-jars", jar_key, bug, mode, "astor_output.json")
+    return VR.summarize(VR.load(p))
+
+
+def engine_and_opts():
+    engine = os.environ.get("ENGINE") or (
+        "podman" if subprocess.run(["bash", "-c", "command -v podman"],
+                                   capture_output=True).returncode == 0 else "docker")
+    if engine == "podman":
+        opts = ["--userns=keep-id"]
+    else:
+        opts = ["--user", "%d:%d" % (os.getuid(), os.getgid())]
+    vol_suffix = os.environ.get("VOL_SUFFIX", ":z")
+    return engine, opts, vol_suffix
+
+
+def run_one(engine, opts, vol_suffix, image, jar_key, jar_path, work_dir,
+            bug, amode, maxtime, seed, hard_timeout):
+    """Run one (jar, bug, mode) in a container, jar mounted RO via ASTOR_JAR."""
+    os.makedirs(work_dir, exist_ok=True)
+    cand = "/astor-candidate.jar"
+    cmd = [engine, "run", "--rm", *opts,
+           "-e", "MODE=%s" % amode, "-e", "MAXTIME=%s" % maxtime,
+           "-e", "SEED=%s" % seed, "-e", "ASTOR_JAR=%s" % cand,
+           "-v", "%s:%s:ro%s" % (jar_path, cand, "," + vol_suffix.lstrip(":") if vol_suffix else ""),
+           "-v", "%s:/work%s" % (work_dir, vol_suffix),
+           image, "run-astor", bug]
+    if hard_timeout and hard_timeout > 0:
+        cmd = ["timeout", "%dm" % hard_timeout] + cmd
+    return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT).returncode
+
+
+def archive(work_dir, jar_key, bug, mode):
+    """Copy the run's astor_output.json (+ log) from work into results-jars/<key>/."""
+    pid, bid = bug.split("-", 1)
+    out = os.path.join(work_dir, pid, bid, "output_astor",
+                       "AstorMain-%s-%s" % (pid, bid), "astor_output.json")
+    if not os.path.isfile(out):
+        return False
+    dest = os.path.join(BASE, "results-jars", jar_key, bug, mode)
+    os.makedirs(dest, exist_ok=True)
+    shutil.copyfile(out, os.path.join(dest, "astor_output.json"))
+    log = os.path.join(work_dir, pid, "%s-astor.log" % bid)
+    if os.path.isfile(log):
+        shutil.copyfile(log, os.path.join(dest, "astor.log"))
+    return True
+
+
+def fmt_traj(t):
+    return "-" if t is None else "(%s)" % ",".join(str(x) for x in t)
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("-h", "--help", action="store_true")
+    ap.add_argument("--jars", default="")
+    ap.add_argument("--modes", default="jGenProg")
+    ap.add_argument("--bugs", default="")
+    ap.add_argument("--from-report")
+    ap.add_argument("--include-patch-diff", action="store_true")
+    ap.add_argument("--maxtime", default="120")
+    ap.add_argument("--seed", default="0")
+    ap.add_argument("--image", default="astor:1.4.0")
+    ap.add_argument("--no-run", action="store_true")
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--hard-timeout", type=int, default=None)
+    ap.add_argument("--csv", help="CSV output path (default: results-jars/comparison.csv)")
+    ap.add_argument("--no-csv", action="store_true", help="do not write a CSV")
+    args = ap.parse_args()
+    if args.help:
+        print(__doc__); return 0
+
+    modes = MODES if args.modes == "all" else [m for m in args.modes.split(",") if m]
+    manifest = read_manifest()
+    all_keys = [m[0] for m in manifest]
+    jar_keys = [k for k in args.jars.split(",") if k] or all_keys
+    unknown = [k for k in jar_keys if k not in all_keys]
+    if unknown:
+        sys.exit("unknown jar key(s): %s (known: %s)" % (",".join(unknown), ",".join(all_keys)))
+    jar_info = {m[0]: m for m in manifest}
+    pinned = next((k for k, _c, _s, note in manifest if "PINNED" in note.upper()), None)
+
+    if args.bugs:
+        bugs = [b for b in args.bugs.split(",") if b]
+    elif args.from_report:
+        bugs = bugs_from_report(args.from_report, modes, args.include_patch_diff)
+        if not bugs:
+            sys.exit("no trajectory-mismatch bugs in %s for modes %s" % (args.from_report, modes))
+    else:
+        sys.exit("specify bugs: --bugs A,B or --from-report FILE (see --help)")
+
+    maxtime = args.maxtime
+    hard_timeout = args.hard_timeout if args.hard_timeout is not None else int(maxtime) * 4
+
+    # 1) ensure candidate jars are present + sha-verified (unless purely scoring)
+    if not args.no_run:
+        fr = subprocess.run([os.path.join(SCRIPTS, "fetch-astor-jars"), *jar_keys])
+        if fr.returncode != 0:
+            sys.exit("fetch-astor-jars failed")
+        engine, opts, vol_suffix = engine_and_opts()
+        print("[jars] %s %s | modes=%s maxtime=%smin seed=%s | %d bug(s) x %d jar(s)"
+              % (engine, args.image, ",".join(modes), maxtime, args.seed, len(bugs), len(jar_keys)))
+
+    # 2) run (bug x mode x jar), archiving each result
+    for key in jar_keys:
+        jar_path = os.path.join(BASE, "resources", "astor-jars", "astor-%s.jar" % key)
+        work_dir = os.path.join(BASE, "work-jars", key)
+        for bug in bugs:
+            pid = bug.split("-", 1)[0]
+            for mode in modes:
+                dest = os.path.join(BASE, "results-jars", key, bug, mode, "astor_output.json")
+                if args.no_run:
+                    continue
+                if os.path.isfile(dest) and not args.force:
+                    print("  [skip] %-9s %-14s %-10s (have result)" % (key, bug, mode)); continue
+                # clean this bug's scratch under the per-jar work dir (podman unshare
+                # so root-owned container files are removable under rootless podman)
+                bid = bug.split("-", 1)[1]
+                stale = [os.path.join(work_dir, pid, bid),
+                         os.path.join(work_dir, pid, bid + "-astor.log")]
+                rm = "rm -rf %s 2>/dev/null || true" % " ".join(shlex.quote(s) for s in stale)
+                subprocess.run(["bash", "-c",
+                                ("podman unshare %s" % rm) if engine == "podman" else rm])
+                print("  [run ] %-9s %-14s %-10s ..." % (key, bug, mode), flush=True)
+                rc = run_one(engine, opts, vol_suffix, args.image, key, jar_path,
+                             work_dir, bug, ASTOR_MODE[mode], maxtime, args.seed, hard_timeout)
+                if not archive(work_dir, key, bug, mode):
+                    print("         -> no result (rc=%d)" % rc)
+
+    # 3) score every jar against the reference, reusing validate-replication.classify
+    rows = []
+    for bug in bugs:
+        project, bug_id = bug.split("-", 1)
+        for mode in modes:
+            ref = ref_summary(project, bug_id, mode)
+            if ref is None:
+                continue
+            entry = {"bug": bug, "mode": mode, "ref_traj": ref["traj"],
+                     "ref_patched": ref["patched"]}
+            for key in jar_keys:
+                local = local_summary(key, bug, mode)
+                klass, outcome_ok, traj, _es, _ed = VR.classify(local, ref)
+                entry[key] = {"present": local is not None, "class": klass,
+                              "outcome_ok": outcome_ok, "traj_state": traj,
+                              "traj": (local or {}).get("traj")}
+            rows.append(entry)
+
+    if not rows:
+        print("no reference data for the requested bugs/modes"); return 0
+
+    # summary table
+    print("\n== astor jar comparison (modes: %s | %d bug-mode pair(s)) ==" % (",".join(modes), len(rows)))
+    print("  %-10s %-8s %-15s %-17s" % ("jar", "results", "OUTCOME match", "TRAJECTORY match"))
+    for key in jar_keys:
+        cells = [r[key] for r in rows]
+        present = [c for c in cells if c["present"]]
+        omatch = sum(1 for c in present if c["outcome_ok"])
+        tcomp = [c for c in present if c["traj_state"] in ("match", "diff")]
+        tmatch = sum(1 for c in tcomp if c["traj_state"] == "match")
+        tag = key + ("*" if key == pinned else "")
+        print("  %-10s %-8s %-15s %-17s" % (
+            tag, "%d/%d" % (len(present), len(rows)),
+            "%d/%d" % (omatch, len(present)) if present else "n/a",
+            "%d/%d" % (tmatch, len(tcomp)) if tcomp else "n/a"))
+    if pinned:
+        print("  (* = pinned reference jar; ref column below is the PUBLISHED result)")
+
+    # per-bug trajectory matrix
+    print("\n  per-bug trajectory  (v = matches published ref, X = differs, - = no result)")
+    hdr = "  %-14s %-10s %-14s" % ("bug", "mode", "ref")
+    for key in jar_keys:
+        hdr += " %-14s" % (key + ("*" if key == pinned else ""))
+    print(hdr)
+    for r in rows:
+        line = "  %-14s %-10s %-14s" % (r["bug"], r["mode"], fmt_traj(r["ref_traj"]))
+        for key in jar_keys:
+            c = r[key]
+            if not c["present"]:
+                mark = "-"
+            elif c["traj_state"] == "match":
+                mark = "v"
+            elif c["traj_state"] == "diff":
+                mark = "X"
+            else:  # no trajectory to compare (e.g. one side unpatched/no general block)
+                mark = "?" if c["outcome_ok"] else "!"
+            line += " %-14s" % ("%s %s" % (mark, fmt_traj(c["traj"])))
+        print(line)
+    print("    (X on OUTCOME too shows '!'; '?' = outcome matched but no trajectory to compare)")
+
+    if not args.no_csv:
+        csv_path = args.csv or os.path.join(BASE, "results-jars", "comparison.csv")
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        fields = ["bug", "mode", "ref_patched", "ref_traj"]
+        for key in jar_keys:
+            fields += ["%s_class" % key, "%s_outcome_ok" % key, "%s_traj" % key]
+        with open(csv_path, "w", newline="") as fd:
+            w = csv.writer(fd); w.writerow(fields)
+            for r in rows:
+                row = [r["bug"], r["mode"], r["ref_patched"], fmt_traj(r["ref_traj"])]
+                for key in jar_keys:
+                    c = r[key]
+                    row += [c["class"], c["outcome_ok"], fmt_traj(c["traj"])]
+                w.writerow(row)
+        print("  csv: %s" % csv_path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
