@@ -1,0 +1,10 @@
+# Large downloads fetched on demand (the vendored jars/tsv ARE committed).
+replications/*/resources/*.tar.gz
+replications/*/resources/*.partial
+
+# Per-replication scratch: container working copies and batch logs.
+replications/*/work/*
+!replications/*/work/.gitkeep
+replications/*/logs/
+
+__pycache__

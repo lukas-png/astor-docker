@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# =============================================================================
+#
+#   run-astor <Project>-<BugId>          e.g.  run-astor Math-70
+#
+# Behaviour is tuned via env vars (defaults match RepairThemAll's runner):
+#   MODE jgenprog | SCOPE local | MAXTIME 120 (min) | SEED 0
+#   MAXGEN 1000000 | POPULATION 1 | STOPFIRST true | PARAMETERS x:x
+#   COMPLIANCE <auto>  per-bug Defects4J *source* compliance from
+#                      $ASTOR_HOME/d4j-compliance.tsv (what the experiment passed
+#                      to -javacompliancelevel); set it explicitly to override.
+#                      A value > 7 also runs test execution on Java 8.
+#   JAVA_ARGS "-Xmx4g -Xms1g"
+#
+# Output is written under the bug working copy:
+#   /work/<Project>/<BugId>/output_astor/AstorMain-<Project>-<BugId>/
+#   plus astor_output.json. Mount -v "$PWD/results:/work" to keep it.
+# =============================================================================
+set -euo pipefail
+
+BUG="${1:?usage: run-astor <Project>-<BugId>   e.g. run-astor Math-70}"
+
+MODE="${MODE:-jgenprog}"
+SCOPE="${SCOPE:-local}"
+MAXTIME="${MAXTIME:-120}"
+SEED="${SEED:-0}"
+MAXGEN="${MAXGEN:-1000000}"
+POPULATION="${POPULATION:-1}"
+STOPFIRST="${STOPFIRST:-true}"
+PARAMETERS="${PARAMETERS:-x:x}"
+JAVA_ARGS="${JAVA_ARGS:--Xmx4g -Xms1g}"
+
+PID="${BUG%%-*}"
+BID="${BUG##*-}"
+WORK="/work/${PID}/${BID}"
+
+# -javacompliancelevel: match what RepairThemAll passed for this exact bug (its
+# Defects4J source compliance) instead of a fixed value, so Astor builds the
+# same Spoon model and reproduces the published search trajectory. Looked up from
+# the vendored table unless COMPLIANCE is set explicitly. Fallback 7 if unknown.
+COMPLIANCE_TABLE="${COMPLIANCE_TABLE:-$ASTOR_HOME/d4j-compliance.tsv}"
+COMPLIANCE_SRC="d4j-compliance.tsv"
+if [ -n "${COMPLIANCE:-}" ]; then
+  COMPLIANCE_SRC="env override"
+else
+  COMPLIANCE="$(awk -F'\t' -v p="$PID" -v b="$BID" \
+                  '$1==p && $2==b {print $3; exit}' "$COMPLIANCE_TABLE" 2>/dev/null || true)"
+  [ -n "$COMPLIANCE" ] || { COMPLIANCE=7; COMPLIANCE_SRC="fallback (no table entry)"; }
+fi
+
+# Capture the whole run (checkout, compile, Astor) to a log file next to the bug
+# working copy so `collect-results` can archive it. This tees only run-astor's
+# OWN stdout/stderr; Astor's child test-validation JVM keeps its private pipe, so
+# the result stream that Astor parses stays clean. The log lives beside WORK (not
+# inside it) so it cannot interfere with `defects4j checkout` creating WORK.
+mkdir -p "/work/${PID}"
+LOG="/work/${PID}/${BID}-astor.log"
+exec > >(tee "$LOG") 2>&1
+
+# -----------------------------------------------------------------------------
+# 1) Checkout + compile under Java 7
+# -----------------------------------------------------------------------------
+export JAVA_HOME="$JAVA7_HOME"
+export PATH="$JAVA7_HOME/bin:$PATH"
+
+echo "[*] Java for checkout/compile: $(java -version 2>&1 | head -n1)"
+echo "[*] Checkout $BUG into $WORK"
+mkdir -p "/work/$PID"
+defects4j checkout -p "$PID" -v "${BID}b" -w "$WORK"
+echo "[*] Compile $BUG"
+defects4j compile -w "$WORK"
+
+cd "$WORK"
+
+# -----------------------------------------------------------------------------
+# 2) Derive bug metadata (equivalent to RepairThemAll's Defects4J bug object)
+# -----------------------------------------------------------------------------
+# Astor's -failing expects test class names (colon-separated), but
+# `defects4j export -p tests.trigger` returns Class::method. Strip the method and
+# dedupe; otherwise Astor treats the method as an extra test class, the
+# validation subprocess emits no result, and every patch is rejected.
+FAILING="$(defects4j export -p tests.trigger 2>/dev/null | sed 's/::.*//' | sort -u | paste -sd:)"
+SRC="$(defects4j export -p dir.src.classes 2>/dev/null)"
+TESTSRC="$(defects4j export -p dir.src.tests 2>/dev/null)"
+BIN="$(defects4j export -p dir.bin.classes 2>/dev/null)"
+TESTBIN="$(defects4j export -p dir.bin.tests 2>/dev/null)"
+DEPS="$(defects4j export -p cp.test 2>/dev/null)"
+[ -n "$DEPS" ] || DEPS='""'
+
+# jvm4testexecution: Java 7 when the bug compiles to <= 7, else Java 8.
+JVM4TEST="$JAVA7_HOME/bin/"
+[ "$COMPLIANCE" -gt 7 ] && JVM4TEST="$JAVA8_HOME/bin/"
+
+echo "[*] FAILING:    $FAILING"
+echo "[*] SRC:        $SRC"
+echo "[*] TESTSRC:    $TESTSRC"
+echo "[*] BIN:        $BIN"
+echo "[*] TESTBIN:    $TESTBIN"
+echo "[*] COMPLIANCE: $COMPLIANCE   [$COMPLIANCE_SRC]   (jvm4testexecution: $JVM4TEST)"
+echo "[*] MODE:       $MODE   SCOPE: $SCOPE   MAXTIME: ${MAXTIME}min   SEED: $SEED"
+
+# -----------------------------------------------------------------------------
+# 3) Run Astor under Java 8 (jtestex7.jar BEFORE astor.jar)
+# -----------------------------------------------------------------------------
+export JAVA_HOME="$JAVA8_HOME"
+export PATH="$JAVA8_HOME/bin:$PATH"
+
+# Astor reads its test-validation results from the spawned JVM's output stream.
+# _JAVA_OPTIONS (set by the base defects4j image) and JAVA_TOOL_OPTIONS make
+# every child JVM print "Picked up ..." lines that corrupt that stream ("Error
+# reading the validation process output"), causing every patch to be rejected.
+# Unset them for Astor and all its subprocesses. Locale/encoding determinism is
+# kept via LANG/LC_ALL/TZ, which are silent.
+unset _JAVA_OPTIONS JAVA_TOOL_OPTIONS || true
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+export TZ="America/New_York"
+# Apply the encoding/locale to Astor's own JVM as explicit -D flags instead.
+JAVA_ARGS="$JAVA_ARGS -Dfile.encoding=UTF-8 -Duser.language=en -Duser.country=US"
+
+# For Java<=7 bugs Astor prepends the "executor jar" to the test-validation JVM's
+# classpath, defaulting to ./lib/jtestex7.jar (resolved against the bug dir, where
+# it does not exist). Without it the JUnit executor class is missing, the child
+# JVM emits no result line, and every patch is rejected ("Error reading the
+# validation process output"). This is handled in two ways:
+#   1) drop the jar where the default property looks (CWD is the bug dir), and
+#   2) also pass an absolute -parameters override in case the property differs.
+mkdir -p "$WORK/lib"
+cp -f "$ASTOR_HOME/lib/jtestex7.jar" "$WORK/lib/jtestex7.jar"
+PARAM_STR="${PARAMETERS}:executorjar:${ASTOR_HOME}/lib/jtestex7.jar"
+
+echo "[*] Java for Astor: $(java -version 2>&1 | head -n1)"
+
+set -x
+java $JAVA_ARGS \
+  -cp "$ASTOR_HOME/lib/jtestex7.jar:$ASTOR_HOME/astor.jar" \
+  fr.inria.main.evolution.AstorMain \
+  -mode "$MODE" \
+  -location . \
+  -id "$BUG" \
+  -failing "$FAILING" \
+  -jvm4testexecution "$JVM4TEST" \
+  -jvm4evosuitetestexecution "$JVM4TEST" \
+  -maxgen "$MAXGEN" \
+  -maxtime "$MAXTIME" \
+  -stopfirst "$STOPFIRST" \
+  -seed "$SEED" \
+  -scope "$SCOPE" \
+  -population "$POPULATION" \
+  -javacompliancelevel "$COMPLIANCE" \
+  -srcjavafolder "$SRC" \
+  -srctestfolder "$TESTSRC" \
+  -binjavafolder "$BIN" \
+  -bintestfolder "$TESTBIN" \
+  -parameters "$PARAM_STR" \
+  -dependencies "$DEPS"

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# gen-compliance-table
+#
+# Regenerate resources/d4j-compliance.tsv ("<Project>\t<Bug>\t<level>"), the
+# per-bug Defects4J *source* compliance run-astor feeds to -javacompliancelevel.
+# Pulled from RepairThemAll's data/benchmarks/defects4j/<project>.json, pinned to
+# the same commit as the vendored astor.jar.
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="https://github.com/program-repair/RepairThemAll.git"
+COMMIT="e902cf54f84a059379d9abfd6159d502963511cc"   # == vendored astor.jar
+OUT="$REPL_DIR/resources/d4j-compliance.tsv"
+
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+git clone --quiet --filter=blob:none --no-checkout --sparse "$REPO" "$tmp/rta"
+cd "$tmp/rta"
+git sparse-checkout init --no-cone >/dev/null
+git sparse-checkout set --no-cone "data/benchmarks/defects4j/*.json" >/dev/null
+git -c advice.detachedHead=false checkout --quiet "$COMMIT"
+
+{
+    echo "# Defects4J source compliance per bug, for run-astor's -javacompliancelevel."
+    echo "# Source: program-repair/RepairThemAll @ ${COMMIT} (.complianceLevel[<bug>].source)"
+    for f in data/benchmarks/defects4j/*.json; do
+        jq -r '.project as $p | .complianceLevel | to_entries[]
+               | [$p, .key, (.value.source|tostring)] | @tsv' "$f"
+    done | sort -k1,1 -k2,2n
+} > "$OUT"
+echo "wrote resources/d4j-compliance.tsv ($(grep -cv '^#' "$OUT") bugs, pinned @ ${COMMIT:0:10})"

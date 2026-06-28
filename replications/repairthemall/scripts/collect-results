@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# collect-results <Project>-<BugId> [mode]
+#
+# Copy a finished run's commit-worthy bits from work/ (scratch) into results/,
+# segregated by Astor mode: results/<Project>-<BugId>/<Mode>/{astor_output.json,
+# astor.log, patches/<variant>/patch.diff}. Mode is read from the run log if not
+# given. Compiled variant dirs and "*_f" reformatted copies are skipped.
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUG="${1:?usage: collect-results <Project>-<BugId> [mode]}"
+PID="${BUG%%-*}"; BID="${BUG##*-}"
+
+OUT="$REPL_DIR/work/$PID/$BID/output_astor/AstorMain-$PID-$BID"
+RUN_LOG="$REPL_DIR/work/$PID/${BID}-astor.log"
+[[ -d "$OUT" ]] || { echo "No Astor output at $OUT (did the run finish?)" >&2; exit 1; }
+
+# Astor -mode value -> reference directory name.
+mode_dir() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        jgenprog) echo jGenProg ;; jkali) echo jKali ;;
+        jmutrepair) echo jMutRepair ;; cardumen) echo Cardumen ;; *) echo "" ;;
+    esac
+}
+RAW="${2:-}"
+[[ -z "$RAW" && -f "$RUN_LOG" ]] && RAW="$(sed -n 's/^\[\*\] MODE: *\([^ ]*\).*/\1/p' "$RUN_LOG" | head -1)"
+MODE="$(mode_dir "${RAW:-jgenprog}")"
+[[ -n "$MODE" ]] || { echo "Unknown mode '${RAW:-}'; pass jgenprog|jkali|jMutRepair|cardumen" >&2; exit 1; }
+
+DEST="$REPL_DIR/results/$PID-$BID/$MODE"
+mkdir -p "$DEST"
+[[ -f "$OUT/astor_output.json" ]] && cp -f "$OUT/astor_output.json" "$DEST/"
+[[ -f "$RUN_LOG" ]] && cp -f "$RUN_LOG" "$DEST/astor.log"
+
+rm -rf "$DEST/patches"
+shopt -s nullglob
+diffs=0
+for vdir in "$OUT"/src/variant-*/; do
+    case "$vdir" in *_f/) continue ;; esac
+    [[ -f "$vdir/patch.diff" ]] || continue
+    v="$(basename "$vdir")"
+    mkdir -p "$DEST/patches/$v"
+    cp -f "$vdir/patch.diff" "$DEST/patches/$v/patch.diff"
+    diffs=$((diffs + 1))
+done
+echo "collected $BUG ($MODE) -> results/$PID-$BID/$MODE ($diffs patch diff(s))"

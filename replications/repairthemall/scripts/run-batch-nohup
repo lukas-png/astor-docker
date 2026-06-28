@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# run-batch-nohup [run-batch args...]
+#
+#
+#   scripts/run-batch-nohup                       # full jGenProg sweep
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOGDIR="$REPL_DIR/logs"; mkdir -p "$LOGDIR"
+ts="$(date +%Y%m%d-%H%M%S)"
+log="$LOGDIR/nohup-$ts.log"
+pidf="$LOGDIR/nohup-$ts.pid"
+
+setsid "$REPL_DIR/scripts/run-batch" "$@" > "$log" 2>&1 < /dev/null &
+pid=$!
+echo "$pid" > "$pidf"
+
+cat <<EOF
+[run-batch-nohup] detached, pid $pid
+  log:   $log
+  follow: tail -f "$log"
+  stop:   kill -- -$pid        # stops run-batch and the running container
+  (resumable: re-run this to continue where it left off)
+EOF
