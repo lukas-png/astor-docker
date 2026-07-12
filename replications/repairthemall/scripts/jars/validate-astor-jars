@@ -54,6 +54,7 @@ ASTOR_MODE = {"jGenProg": "jgenprog", "jKali": "jkali",
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPTS = os.path.join(BASE, "scripts", "validate")
+JARS = os.path.dirname(os.path.abspath(__file__))
 
 
 def _load_validator():
@@ -220,7 +221,7 @@ def main():
 
     # 1) ensure candidate jars are present + sha-verified (unless purely scoring)
     if not args.no_run:
-        fr = subprocess.run([os.path.join(SCRIPTS, "fetch-astor-jars"), *jar_keys])
+        fr = subprocess.run([os.path.join(JARS, "fetch-astor-jars"), *jar_keys])
         if fr.returncode != 0:
             sys.exit("fetch-astor-jars failed")
         engine, opts, vol_suffix = engine_and_opts()
