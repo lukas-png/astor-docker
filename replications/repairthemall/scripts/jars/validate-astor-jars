@@ -117,6 +117,17 @@ def local_summary(jar_key, bug, mode):
     return VR.summarize(VR.load(p))
 
 
+def local_log(jar_key, bug, mode):
+    """Parsed run log of one candidate (jar, bug, mode), for the LOG diff vs ref."""
+    return VR.parse_log(os.path.join(BASE, "results-jars", jar_key, bug, mode, "astor.log"))
+
+
+def ref_log(project, bug, mode):
+    """Parsed reference repair.log for the LOG diff (same tree as ref_summary)."""
+    return VR.parse_log(os.path.join(BASE, "reference", "Defects4J",
+                                     project, bug, mode, "0", "repair.log"))
+
+
 def engine_and_opts():
     engine = os.environ.get("ENGINE") or (
         "podman" if subprocess.run(["bash", "-c", "command -v podman"],
@@ -252,12 +263,14 @@ def main():
                 continue
             entry = {"bug": bug, "mode": mode, "ref_traj": ref["traj"],
                      "ref_patched": ref["patched"]}
+            rlog = ref_log(project, bug_id, mode)
             for key in jar_keys:
                 local = local_summary(key, bug, mode)
                 klass, outcome_ok, traj, _es, _ed = VR.classify(local, ref)
+                _states, log_diff = VR.log_compare(local_log(key, bug, mode), rlog)
                 entry[key] = {"present": local is not None, "class": klass,
                               "outcome_ok": outcome_ok, "traj_state": traj,
-                              "traj": (local or {}).get("traj")}
+                              "traj": (local or {}).get("traj"), "log_diff": log_diff}
             rows.append(entry)
 
     if not rows:
@@ -302,19 +315,33 @@ def main():
         print(line)
     print("    (X on OUTCOME too shows '!'; '?' = outcome matched but no trajectory to compare)")
 
+    print("\n  log diffs vs reference repair.log (report-only):")
+    any_ld = False
+    for r in rows:
+        for key in jar_keys:
+            ld = r[key].get("log_diff")
+            if ld:
+                any_ld = True
+                print("    %-14s %-10s %-10s %s" % (r["bug"], r["mode"], key, ld))
+    if not any_ld:
+        print("    (none -- run parameters/deps/suspiciousness match the reference, "
+              "or no logs)")
+
     if not args.no_csv:
         csv_path = args.csv or os.path.join(BASE, "results-jars", "comparison.csv")
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         fields = ["bug", "mode", "ref_patched", "ref_traj"]
         for key in jar_keys:
-            fields += ["%s_class" % key, "%s_outcome_ok" % key, "%s_traj" % key]
+            fields += ["%s_class" % key, "%s_outcome_ok" % key, "%s_traj" % key,
+                       "%s_log_diff" % key]
         with open(csv_path, "w", newline="") as fd:
             w = csv.writer(fd); w.writerow(fields)
             for r in rows:
                 row = [r["bug"], r["mode"], r["ref_patched"], fmt_traj(r["ref_traj"])]
                 for key in jar_keys:
                     c = r[key]
-                    row += [c["class"], c["outcome_ok"], fmt_traj(c["traj"])]
+                    row += [c["class"], c["outcome_ok"], fmt_traj(c["traj"]),
+                            c.get("log_diff", "")]
                 w.writerow(row)
         print("  csv: %s" % csv_path)
     return 0
