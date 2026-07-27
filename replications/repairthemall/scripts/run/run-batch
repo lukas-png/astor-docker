@@ -20,7 +20,7 @@ set -uo pipefail
 REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 MODES="jGenProg"; MAXTIME=120; SEED=0; IMAGE="astor:1.4.0"; LIMIT=0; FORCE=0; BUGS=()
-HARD_TIMEOUT="${HARD_TIMEOUT:-}"; JAVA_ARGS="${JAVA_ARGS:-}"
+HARD_TIMEOUT="${HARD_TIMEOUT:-}"; JAVA_ARGS="${JAVA_ARGS:-}"; KEEP_WORK="${KEEP_WORK:-0}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --modes) MODES="$2"; shift 2 ;; --maxtime) MAXTIME="$2"; shift 2 ;;
@@ -46,6 +46,17 @@ else
 fi
 REF="$REPL_DIR/reference/Defects4J"
 LOGDIR="$REPL_DIR/logs"; mkdir -p "$LOGDIR"
+
+# Engine-aware scratch removal. Rootless podman may map the container's writes to
+# a host root, so remove them via `podman unshare`; rootful docker keeps work/
+# host-owned (--user) so a plain rm suffices. Falls back to a plain rm either way.
+rm_scratch() {
+    if [[ "$ENGINE" == podman ]]; then
+        "$ENGINE" unshare rm -rf "$@" 2>/dev/null || rm -rf "$@" 2>/dev/null
+    else
+        rm -rf "$@" 2>/dev/null
+    fi
+}
 
 astor_mode() {
     case "$1" in jGenProg) echo jgenprog ;; jKali) echo jkali ;;
@@ -82,11 +93,7 @@ for line in "${WORK[@]}"; do
 
     printf "[%d/%d] %-14s %-10s ... " "$((ran+skipped+1))" "$total" "$BUG" "$MODEDIR"
     stale=("$REPL_DIR/work/$PID/$BID" "$REPL_DIR/work/$PID/${BID}-astor.log")
-    if [[ "$ENGINE" == podman ]]; then
-        "$ENGINE" unshare rm -rf "${stale[@]}" 2>/dev/null || rm -rf "${stale[@]}" 2>/dev/null
-    else
-        rm -rf "${stale[@]}" 2>/dev/null
-    fi
+    rm_scratch "${stale[@]}"
 
     blog="$LOGDIR/${BUG}-${MODEDIR}.log"
     ENVS=(-e MODE="$amode" -e MAXTIME="$MAXTIME" -e SEED="$SEED")
@@ -109,6 +116,12 @@ for line in "${WORK[@]}"; do
     else
         echo "FAILED (rc=$rc, see logs/${BUG}-${MODEDIR}.log)"; failed=$((failed+1))
     fi
+
+    # Bound scratch to one bug at a time. Results are already in results/ (on
+    # success) and the run's stdout is captured in logs/ (on failure/hang), so
+    # Astor's output_astor tree -- thousands of compiled variant-*/ dirs that
+    # exhaust inodes if left to pile up -- is disposable. KEEP_WORK=1 retains it.
+    [[ "$KEEP_WORK" == 1 ]] || rm_scratch "${stale[@]}"
 done
 
 echo "[run-batch] ran=$ran (patched=$ok no-patch=$nopatch failed=$failed hang=$hung) skipped=$skipped"

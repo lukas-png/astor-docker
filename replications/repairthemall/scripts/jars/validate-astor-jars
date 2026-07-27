@@ -30,6 +30,8 @@ Options:
   --from-report FILE  take bugs from a validate-replication CSV: those classified
                       MATCH_OUTCOME_TRAJ_DIFF (add --include-patch-diff for PATCH_DIFF)
   --include-patch-diff  with --from-report, also include PATCH_DIFF bugs
+  --jar-relevant-only   with --from-report, select by structured tag P-segment
+                        (P03/P04/P09) -- only root causes a jar swap can move
   --maxtime N         minutes per run (default 120; lower breaks trajectory fidelity)
   --seed N            default 0        --image TAG   default astor:1.4.0
   --no-run            score existing results-jars/ only; run nothing
@@ -89,7 +91,16 @@ def read_manifest():
     return out
 
 
-def bugs_from_report(path, modes, include_patch_diff):
+# P-segments whose root cause is on the search/RNG path (or unexplained) -- the only bugs
+# a different astor.jar can plausibly move. P01/P02/P05 (config/env/noise) never can.
+JAR_RELEVANT_PSEGS = {"P03", "P04", "P09"}
+
+
+def bugs_from_report(path, modes, include_patch_diff, jar_relevant_only=False):
+    """Bugs to sweep from a validate-replication CSV. Default: those the validator
+    classified MATCH_OUTCOME_TRAJ_DIFF (+PATCH_DIFF with --include-patch-diff). With
+    jar_relevant_only, pick by the structured tag's P-segment instead (P03/P04/P09) --
+    the only causes a jar swap can move."""
     wanted = {"MATCH_OUTCOME_TRAJ_DIFF"}
     if include_patch_diff:
         wanted.add("PATCH_DIFF")
@@ -99,7 +110,11 @@ def bugs_from_report(path, modes, include_patch_diff):
         for r in csv.DictReader(fd):
             if r.get("mode") not in modes:
                 continue
-            if r.get("classification") in wanted:
+            if jar_relevant_only:
+                keep = (r.get("tag", "") or "")[:3] in JAR_RELEVANT_PSEGS
+            else:
+                keep = r.get("classification") in wanted
+            if keep:
                 b = "%s-%s" % (r["project"], r["bug"])
                 if b not in seen:
                     seen.add(b); bugs.append(b)
@@ -139,6 +154,19 @@ def engine_and_opts():
         opts = ["--user", "%d:%d" % (os.getuid(), os.getgid())]
     vol_suffix = os.environ.get("VOL_SUFFIX", ":z")
     return engine, opts, vol_suffix
+
+
+def purge_scratch(work_dir, pid, bid, engine):
+    """Engine-aware removal of one bug's scratch under a per-jar work dir. Rootless
+    podman may map the container's writes to a host root, so remove them via
+    `podman unshare`; rootful docker keeps them host-owned. Dropping the whole
+    <pid>/<bid> tree clears Astor's output_astor variant-*/ dirs (thousands of
+    compiled-class dirs per run) that otherwise pile up and exhaust inodes."""
+    stale = [os.path.join(work_dir, pid, bid),
+             os.path.join(work_dir, pid, bid + "-astor.log")]
+    rm = "rm -rf %s 2>/dev/null || true" % " ".join(shlex.quote(s) for s in stale)
+    subprocess.run(["bash", "-c",
+                    ("podman unshare %s" % rm) if engine == "podman" else rm])
 
 
 def run_one(engine, opts, vol_suffix, image, jar_key, jar_path, work_dir,
@@ -185,6 +213,9 @@ def main():
     ap.add_argument("--bugs", default="")
     ap.add_argument("--from-report")
     ap.add_argument("--include-patch-diff", action="store_true")
+    ap.add_argument("--jar-relevant-only", action="store_true",
+                    help="with --from-report, pick bugs by tag P-segment (P03/P04/P09) "
+                         "instead of classification -- only causes a jar swap can move")
     ap.add_argument("--maxtime", default="120")
     ap.add_argument("--seed", default="0")
     ap.add_argument("--image", default="astor:1.4.0")
@@ -210,7 +241,8 @@ def main():
     if args.bugs:
         bugs = [b for b in args.bugs.split(",") if b]
     elif args.from_report:
-        bugs = bugs_from_report(args.from_report, modes, args.include_patch_diff)
+        bugs = bugs_from_report(args.from_report, modes, args.include_patch_diff,
+                                args.jar_relevant_only)
         if not bugs:
             sys.exit("no trajectory-mismatch bugs in %s for modes %s" % (args.from_report, modes))
     else:
@@ -240,19 +272,19 @@ def main():
                     continue
                 if os.path.isfile(dest) and not args.force:
                     print("  [skip] %-9s %-14s %-10s (have result)" % (key, bug, mode)); continue
-                # clean this bug's scratch under the per-jar work dir (podman unshare
-                # so root-owned container files are removable under rootless podman)
+                # clean this bug's scratch under the per-jar work dir before running
                 bid = bug.split("-", 1)[1]
-                stale = [os.path.join(work_dir, pid, bid),
-                         os.path.join(work_dir, pid, bid + "-astor.log")]
-                rm = "rm -rf %s 2>/dev/null || true" % " ".join(shlex.quote(s) for s in stale)
-                subprocess.run(["bash", "-c",
-                                ("podman unshare %s" % rm) if engine == "podman" else rm])
+                purge_scratch(work_dir, pid, bid, engine)
                 print("  [run ] %-9s %-14s %-10s ..." % (key, bug, mode), flush=True)
                 rc = run_one(engine, opts, vol_suffix, args.image, key, jar_path,
                              work_dir, bug, ASTOR_MODE[mode], maxtime, args.seed, hard_timeout)
                 if not archive(work_dir, key, bug, mode):
                     print("         -> no result (rc=%d)" % rc)
+                # Bound scratch to one bug at a time: the result is archived (above)
+                # and the run log is left in results-jars/, so Astor's output_astor
+                # variant-*/ tree is disposable. KEEP_WORK=1 retains it for debugging.
+                if os.environ.get("KEEP_WORK") != "1":
+                    purge_scratch(work_dir, pid, bid, engine)
 
     # 3) score every jar against the reference, reusing validate-replication.classify
     rows = []

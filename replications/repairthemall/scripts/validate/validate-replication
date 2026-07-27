@@ -48,7 +48,7 @@ def load(path):
 
 # LOG tier: fields that live only in the run log (local astor.log vs reference
 # repair.log, same markers)
-LOG_SUBFIELDS = ("params", "deps", "susp", "line_susp")
+LOG_SUBFIELDS = ("params", "deps", "susp", "line_susp", "fail_tests")
 
 # logical param -> source keys to try (p:<key>= wins over the echoed CLI args,
 # where e.g. maxGeneration is spelled -maxgen).
@@ -70,6 +70,10 @@ _SUSP_RES = {
     "initial_suspicious_size": re.compile(r"Initial suspicious size:\s*(\d+)"),
 }
 _LINESUSP_RE = re.compile(r"lineSuspiciousness=\s*([\d.]+)")
+# The failing tests that drive fault localization. Astor prints the (mis-spelled)
+# marker "Test failt: <FQ Class#method>" per test, and a "fails: N" count.
+_FAILTEST_RE = re.compile(r"Test failt:\s*(\S+)")
+_FAILCOUNT_RE = re.compile(r"Test Result Total:\d+,\s*fails:\s*(\d+)")
 
 
 def _jars(depstr):
@@ -119,9 +123,12 @@ def parse_log(path):
         m = rx.search(text)
         susp[k] = m.group(1) if m else None
     deps = _jars(p_vals.get("dependenciespath") or cli.get("dependencies"))
+    fc = _FAILCOUNT_RE.search(text)
     return {"parameters": params, "suspiciousness": susp,
             "dependencies": deps,
-            "line_suspiciousness": _LINESUSP_RE.findall(text)}
+            "line_suspiciousness": _LINESUSP_RE.findall(text),
+            "failing_tests": sorted(set(_FAILTEST_RE.findall(text))),
+            "fail_count": fc.group(1) if fc else None}
 
 
 def log_compare(local_log, ref_log):
@@ -155,6 +162,13 @@ def log_compare(local_log, ref_log):
     if lc != rc:
         detail.append("line_susp: local_n=%d ref_n=%d" % (sum(lc.values()), sum(rc.values())))
 
+    lf, rf = set(local_log["failing_tests"]), set(ref_log["failing_tests"])
+    states["fail_tests"] = "match" if lf == rf else "diff"
+    if lf != rf:
+        detail.append("fail_tests: +local%s -ref%s (n local=%s ref=%s)"
+                      % (sorted(lf - rf), sorted(rf - lf),
+                         local_log["fail_count"], ref_log["fail_count"]))
+
     return states, " | ".join(detail)
 
 
@@ -171,6 +185,71 @@ def load_coverage(base):
     except IOError:
         return {}
     return out
+
+
+def load_tags(base):
+    """(project, bug, mode) -> (tag, note) from reference/bug-tags.csv: manual overrides
+    of the auto-derived root-cause code. {} if absent. '#'/blank lines are skipped; an
+    empty mode acts as a wildcard for that (project, bug)."""
+    path = os.path.join(base, "reference", "bug-tags.csv")
+    out = {}
+    try:
+        with open(path, newline="") as fd:
+            rows = [ln for ln in fd if ln.strip() and not ln.lstrip().startswith("#")]
+    except IOError:
+        return {}
+    for r in csv.DictReader(rows):
+        out[(r["project"], r["bug"], (r.get("mode") or "").strip())] = (
+            (r.get("tag") or "").strip(), (r.get("note") or "").strip())
+    return out
+
+
+def lookup_tag(tags, project, bug, mode):
+    """Manual (tag, note) for a bug, exact mode first then the mode-wildcard row."""
+    return tags.get((project, bug, mode)) or tags.get((project, bug, ""))
+
+
+# Structured root-cause code  P<nn>_S<nn>[-E<nn>[+E<nn>...]]  (see reference/bug-tags.csv).
+_S_FROM_CLASS = {
+    "MATCH_NOPATCH": "S00", "MATCH_OUTCOME": "S00", "MATCH_TRAJECTORY": "S00",
+    "MATCH_OUTCOME_TRAJ_DIFF": "S03", "PATCH_DIFF": "S02", "OUTCOME_DIFF": "S01",
+    "MISSING_LOCAL": "S08", "REF_NO_RESULT": "S09",
+}
+# evidence codes in fixed ascending order (log subfield state / exact state) -> E-segment
+_EVIDENCE = (("params", "E01"), ("deps", "E02"), ("susp", "E03"),
+             ("line_susp", "E04"), ("fail_tests", "E05"))
+
+
+def derive_tag(classification, log_states, exact_state, traj_state):
+    """Auto root-cause code for one bug. Returns (tag, is_mismatch).
+
+    S = symptom (from classification). E = every diverging field (log + exact), ascending.
+    P = earliest divergence in the pipeline cascade (params>deps>fault-loc>search), because
+    an early diff poisons everything downstream -- so the earliest is the true root cause.
+    Matches -> P00_S00. Only P04/P03/P09 are jar-sweep relevant. P05/P06 are manual-only."""
+    s = _S_FROM_CLASS.get(classification, "S00")
+    ev = [code for key, code in _EVIDENCE if log_states.get(key) == "diff"]
+    if exact_state == "diff":
+        ev.append("E06")
+    e_part = ("-" + "+".join(ev)) if ev else ""
+    if s == "S00":
+        return ("P00_S00", False)
+    if classification == "MISSING_LOCAL":
+        return ("P00_S08" + e_part, False)
+    if classification == "REF_NO_RESULT":
+        return ("P07_S09" + e_part, False)
+    # genuine mismatch: first cascade stage that diverges wins the P-segment
+    if log_states.get("params") == "diff":
+        p = "P01"
+    elif log_states.get("deps") == "diff":
+        p = "P02"
+    elif any(log_states.get(k) == "diff" for k in ("susp", "line_susp", "fail_tests")):
+        p = "P03"
+    elif traj_state == "diff":
+        p = "P04"
+    else:
+        p = "P09"
+    return (p + "_" + s + e_part, True)
 
 
 def patch_set(data):
@@ -259,6 +338,7 @@ def main():
         sys.exit("no reference (run scripts/reference/sync-reference-results)")
 
     cov = load_coverage(base)
+    tags = load_tags(base)
 
     rows = []
     for project in sorted(os.listdir(ref_root)):
@@ -281,6 +361,12 @@ def main():
                     if local is not None else None
                 ref_log = parse_log(os.path.join(seed, "repair.log"))
                 log_states, log_diff = log_compare(local_log, ref_log)
+                auto_tag, _mm = derive_tag(klass, log_states, exact_state, traj)
+                man = lookup_tag(tags, project, bug, mode)
+                if man and man[0]:
+                    tag, tag_source, tag_note = man[0], "manual", man[1]
+                else:
+                    tag, tag_source, tag_note = auto_tag, "auto", (man[1] if man else "")
                 rows.append({"project": project, "bug": bug, "mode": mode,
                              "local_present": local is not None,
                              "ref_patched": ref["patched"],
@@ -293,7 +379,9 @@ def main():
                              "log_deps_state": log_states["deps"],
                              "log_susp_state": log_states["susp"],
                              "log_line_susp_state": log_states["line_susp"],
+                             "log_fail_tests_state": log_states["fail_tests"],
                              "log_diff_fields": log_diff,
+                             "tag": tag, "tag_source": tag_source, "tag_note": tag_note,
                              "upstream_status": cov.get((project, bug), (None, ""))[1]})
 
     # Bugs upstream produced no result for (absent from reference/) but that we ran
@@ -307,6 +395,11 @@ def main():
             local = summarize(load(os.path.join(local_dir, "astor_output.json")))
             if local is None:
                 continue   # neither ref nor local: pure upstream accounting
+            man = lookup_tag(tags, project, bug, "jGenProg")
+            if man and man[0]:
+                tag, tag_source, tag_note = man[0], "manual", man[1]
+            else:
+                tag, tag_source, tag_note = "P07_S09", "auto", (man[1] if man else "")
             rows.append({"project": project, "bug": bug, "mode": "jGenProg",
                          "local_present": True, "ref_patched": None,
                          "local_patched": local["patched"], "outcome_ok": None,
@@ -315,7 +408,9 @@ def main():
                          "exact_state": "na", "exact_diff_fields": "",
                          "log_params_state": "na", "log_deps_state": "na",
                          "log_susp_state": "na", "log_line_susp_state": "na",
+                         "log_fail_tests_state": "na",
                          "log_diff_fields": "ref no result (upstream %s)" % status,
+                         "tag": tag, "tag_source": tag_source, "tag_note": tag_note,
                          "upstream_status": status})
 
     compared = [r for r in rows if r["outcome_ok"] in (True, False)]
@@ -344,7 +439,8 @@ def main():
           % (len(ematch), len(ecomp), pct(len(ematch), len(ecomp)), len(ecomp) - len(ematch)))
     for field, label in (("log_params_state", "LOG params"),
                          ("log_deps_state", "LOG deps  "),
-                         ("log_susp_state", "LOG susp  ")):
+                         ("log_susp_state", "LOG susp  "),
+                         ("log_fail_tests_state", "LOG fails ")):
         m, d = log_rate(field)
         print("  %s identical: %d/%d  %s   (differ: %d, report-only)"
               % (label, m, d, pct(m, d), d - m))
@@ -358,6 +454,23 @@ def main():
 
     bad = [r for r in compared if r["classification"] in
            ("OUTCOME_DIFF", "PATCH_DIFF", "MATCH_OUTCOME_TRAJ_DIFF")]
+
+    # root-cause tags (mismatches only). P-segment = earliest diverging pipeline stage.
+    if bad:
+        manual = sum(1 for r in bad if r["tag_source"] == "manual")
+        unexpl = sum(1 for r in bad if r["tag"][:3] == "P09")
+        pseg = Counter(r["tag"][:3] for r in bad)
+        print("  tags: %d mismatch(es) -> %d manual, %d auto, %d unexplained (P09)"
+              % (len(bad), manual, len(bad) - manual, unexpl))
+        print("    by root cause: " + "  ".join("%s:%d" % (p, pseg[p]) for p in sorted(pseg)))
+        proj_p = {}
+        for r in bad:
+            proj_p.setdefault(r["project"], Counter())[r["tag"][:3]] += 1
+        print("    project x P (where the replication struggles):")
+        for project in sorted(proj_p):
+            cells = proj_p[project]
+            print("      %-9s %s" % (project,
+                  "  ".join("%s:%d" % (p, cells[p]) for p in sorted(cells))))
     if bad:
         print("  mismatches (up to %d):" % args.show)
         for r in bad[:args.show]:
@@ -390,6 +503,7 @@ def main():
         lp_m, lp_d = log_rate("log_params_state")
         ld_m, ld_d = log_rate("log_deps_state")
         ls_m, ls_d = log_rate("log_susp_state")
+        lf_m, lf_d = log_rate("log_fail_tests_state")
         rate = lambda n, d: round(n / d, 4) if d else None
         summary = {
             "modes": modes,
@@ -406,8 +520,18 @@ def main():
                 "log_params": {"compared": lp_d, "identical": lp_m, "differ": lp_d - lp_m, "rate": rate(lp_m, lp_d)},
                 "log_deps": {"compared": ld_d, "identical": ld_m, "differ": ld_d - ld_m, "rate": rate(ld_m, ld_d)},
                 "log_susp": {"compared": ls_d, "identical": ls_m, "differ": ls_d - ls_m, "rate": rate(ls_m, ls_d)},
+                "log_fail_tests": {"compared": lf_d, "identical": lf_m, "differ": lf_d - lf_m, "rate": rate(lf_m, lf_d)},
             },
             "classifications": counts,
+            "tags": {
+                "mismatches": len(bad),
+                "manual": sum(1 for r in bad if r["tag_source"] == "manual"),
+                "unexplained": sum(1 for r in bad if r["tag"][:3] == "P09"),
+                "by_root_cause": dict(Counter(r["tag"][:3] for r in bad)),
+                "by_project_root_cause": {
+                    p: dict(Counter(r["tag"][:3] for r in bad if r["project"] == p))
+                    for p in sorted({r["project"] for r in bad})},
+            },
             "bugs": [{k: (list(v) if isinstance(v, (tuple, frozenset)) else v)
                       for k, v in r.items()} for r in rows],
         }
