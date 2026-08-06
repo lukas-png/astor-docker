@@ -11,6 +11,14 @@
 #                      to -javacompliancelevel); set it explicitly to override.
 #                      A value > 7 also runs test execution on Java 8.
 #   JAVA_ARGS "-Xmx4g -Xms1g"
+#   DEPS_SOURCE rta    -dependencies construction: "rta" replicates RepairThemAll's
+#                      Defects4J.classpath() as of the experiment (pre-4a98bc1:
+#                      junit-4.11 + cobertura first, checkout lib/ jars, framework
+#                      project libs ); "cp.test" uses plain
+#                      `defects4j export -p cp.test` (the pre-replication behaviour,
+#                      kept for the with/without-cobertura A/B experiment).
+#   DEPS_DRYRUN 0      1 = stop after checkout + DEPS computation and print the
+#                      classpath (no compile, no Astor)
 #
 # Output is written under the bug working copy:
 #   /work/<Project>/<BugId>/output_astor/AstorMain-<Project>-<BugId>/
@@ -29,6 +37,10 @@ POPULATION="${POPULATION:-1}"
 STOPFIRST="${STOPFIRST:-true}"
 PARAMETERS="${PARAMETERS:-x:x}"
 JAVA_ARGS="${JAVA_ARGS:--Xmx4g -Xms1g}"
+DEPS_SOURCE="${DEPS_SOURCE:-rta}"
+DEPS_DRYRUN="${DEPS_DRYRUN:-0}"
+D4J_HOME="${D4J_HOME:-/opt/defects4j}"
+RTA_CLASSPATH_TABLE="${RTA_CLASSPATH_TABLE:-$ASTOR_HOME/rta-classpath.tsv}"
 
 PID="${BUG%%-*}"
 BID="${BUG##*-}"
@@ -67,8 +79,10 @@ echo "[*] Java for checkout/compile: $(java -version 2>&1 | head -n1)"
 echo "[*] Checkout $BUG into $WORK"
 mkdir -p "/work/$PID"
 defects4j checkout -p "$PID" -v "${BID}b" -w "$WORK"
-echo "[*] Compile $BUG"
-defects4j compile -w "$WORK"
+if [ "$DEPS_DRYRUN" != 1 ]; then
+  echo "[*] Compile $BUG"
+  defects4j compile -w "$WORK"
+fi
 
 cd "$WORK"
 
@@ -84,7 +98,47 @@ SRC="$(defects4j export -p dir.src.classes 2>/dev/null)"
 TESTSRC="$(defects4j export -p dir.src.tests 2>/dev/null)"
 BIN="$(defects4j export -p dir.bin.classes 2>/dev/null)"
 TESTBIN="$(defects4j export -p dir.bin.tests 2>/dev/null)"
-DEPS="$(defects4j export -p cp.test 2>/dev/null)"
+
+# -dependencies: what the experiment put on Astor's (and thus GZoltar's) classpath.
+# The published runs did NOT use `defects4j export -p cp.test`; RepairThemAll built
+# the classpath itself (Defects4J.classpath(), revision 195df8e06 -- the algorithm
+# was rewritten mid-experiment on 2018-12-01 by 4a98bc1, but every published
+# jGenProg run carries cobertura, which only the older code produces). The jar set
+# changes GZoltar's suspiciousness ranking, so DEPS_SOURCE=rta replicates that
+# algorithm quirk-for-quirk; DEPS_SOURCE=cp.test keeps the plain Defects4J export
+# for the with/without-cobertura A/B comparison. 
+if [ "$DEPS_SOURCE" = rta ]; then
+  [ -f "$RTA_CLASSPATH_TABLE" ] \
+    || { echo "[!] RTA classpath table not found: $RTA_CLASSPATH_TABLE" >&2; exit 1; }
+  # 1) unconditional prefix: junit-4.11 + cobertura from the framework lib dir
+  #    (byte-identical between the experiment's D4J checkout and this image's).
+  for j in junit-4.11.jar cobertura-2.0.3.jar; do
+    [ -f "$D4J_HOME/framework/projects/lib/$j" ] \
+      || echo "[!] warning: $D4J_HOME/framework/projects/lib/$j missing" >&2
+  done
+  DEPS="$D4J_HOME/framework/projects/lib/junit-4.11.jar"
+  DEPS="$DEPS:$D4J_HOME/framework/projects/lib/cobertura-2.0.3.jar"
+  # 2) the project JSON's workdir-relative classpath entries for this bug's range
+  #    (first row, ascending by max bug id, with BID <= max -- rows are pre-sorted).
+  CP_ENTRIES="$(awk -F'\t' -v p="$PID" -v b="$BID" \
+                  '$1==p && $2=="cp" && b+0<=$3+0 {print $4; exit}' "$RTA_CLASSPATH_TABLE")"
+  if [ -n "$CP_ENTRIES" ]; then
+    IFS=':' read -r -a _cp_ents <<<"$CP_ENTRIES"
+    for e in "${_cp_ents[@]}"; do DEPS="$DEPS:$WORK/$e"; done
+  fi
+  # 3) every jar under the checkout's lib/ (recursive; sorted for determinism --
+  #    the original os.walk order was filesystem-dependent).
+  while IFS= read -r j; do DEPS="$DEPS:$j"; done \
+    < <(find "$WORK/lib" -type f -name '*.jar' 2>/dev/null | LC_ALL=C sort)
+  # 4) framework/projects/<P>/lib files (recursive) whose BASENAME appears verbatim
+  #    in the JSON "libs" list. Entries containing '/' never match -- original quirk.
+  _LIBS="$(awk -F'\t' -v p="$PID" '$1==p && $2=="lib" {print $3}' "$RTA_CLASSPATH_TABLE")"
+  while IFS= read -r f; do
+    grep -Fxq -- "${f##*/}" <<<"$_LIBS" && DEPS="$DEPS:$f"
+  done < <(find "$D4J_HOME/framework/projects/$PID/lib" -type f 2>/dev/null | LC_ALL=C sort)
+else
+  DEPS="$(defects4j export -p cp.test 2>/dev/null)"
+fi
 [ -n "$DEPS" ] || DEPS='""'
 
 # jvm4testexecution: Java 7 when the bug compiles to <= 7, else Java 8.
@@ -98,6 +152,13 @@ echo "[*] BIN:        $BIN"
 echo "[*] TESTBIN:    $TESTBIN"
 echo "[*] COMPLIANCE: $COMPLIANCE   [$COMPLIANCE_SRC]   (jvm4testexecution: $JVM4TEST)"
 echo "[*] MODE:       $MODE   SCOPE: $SCOPE   MAXTIME: ${MAXTIME}min   SEED: $SEED"
+echo "[*] DEPS_SOURCE: $DEPS_SOURCE"
+echo "[*] DEPS:       $DEPS"
+
+if [ "$DEPS_DRYRUN" = 1 ]; then
+  echo "[*] DEPS_DRYRUN=1 -- stopping before compile/Astor."
+  exit 0
+fi
 
 # -----------------------------------------------------------------------------
 # 3) Run Astor under Java 8 (jtestex7.jar BEFORE astor.jar)

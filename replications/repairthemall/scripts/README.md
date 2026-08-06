@@ -32,6 +32,7 @@ run/run-batch ─(run/collect-results)─▶ results/ ─▶ validate/validate-r
 |--------|------|
 | `validate-replication` | Corpus-wide OUTCOME / TRAJECTORY / EXACT check. The CI gate. |
 | `compare-result` | Quick single-bug local-vs-reference spot check. |
+| `verify-deps` | Check the `DEPS_SOURCE=rta` classpath reconstruction against the published `repair.log`s per bug, without running Astor (container dry-run). |
 
 ## `jars/` — test the pinned jar (see reference/astor-jar-candidates.tsv)
 | script | does |
@@ -46,7 +47,8 @@ run/run-batch ─(run/collect-results)─▶ results/ ─▶ validate/validate-r
 | `sync-reference-results` | Refresh `reference/Defects4J/` from the published experiment. |
 | `audit-upstream-coverage` | Build the per-bug coverage evidence (`reference/coverage-jGenProg.csv`). |
 | `gen-compliance-table` | Regenerate `resources/d4j-compliance.tsv` (per-bug `-javacompliancelevel`). |
+| `gen-rta-classpath-table` | Regenerate `resources/rta-classpath.tsv` from the vendored `resources/rta-defects4j/` JSONs (drives `DEPS_SOURCE=rta`). |
 
 Python: `validate/validate-replication`, `validate/compare-result`,
-`jars/validate-astor-jars`. The rest are bash. `jars/validate-astor-jars` imports
+`validate/verify-deps`, `jars/validate-astor-jars`. The rest are bash. `jars/validate-astor-jars` imports
 `validate/validate-replication` so both score with the same OUTCOME/TRAJECTORY rules.

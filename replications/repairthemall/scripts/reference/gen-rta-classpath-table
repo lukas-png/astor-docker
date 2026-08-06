@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# gen-rta-classpath-table
+#
+# Regenerate resources/rta-classpath.tsv from the vendored RepairThemAll project
+# JSONs (resources/rta-defects4j/*.json, pinned pre-4a98bc1 revision -- see the
+# README there). run-astor's DEPS_SOURCE=rta reads this table to rebuild the
+# experiment's -dependencies classpath without JSON tooling in the image.
+#
+# Row formats (tab-separated):
+#   <Project>  cp   <max_bug_id>  <colon-separated workdir-relative entries>
+#   <Project>  lib  <libs entry as-is>
+# cp rows: pick the first row (ascending max_bug_id) with bug_id <= max_bug_id,
+# mirroring Defects4J.classpath()'s OrderedDict scan. lib rows: a framework
+# projects/<P>/lib file is on the classpath iff its BASENAME equals the entry
+# verbatim -- entries containing '/' therefore never match, replicating the
+# original's quirk (e.g. Chart's "cobertura-lib/servlet-api-2.5-6.1.14.jar").
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SRC="$REPL_DIR/resources/rta-defects4j"
+OUT="$REPL_DIR/resources/rta-classpath.tsv"
+COMMIT="195df8e068cfbbeb0a0f1126a2e1bef51fbefdba"   # pre-4a98bc1 (see rta-defects4j/README.md)
+
+{
+    echo "# RepairThemAll Defects4J.classpath() inputs per project, for run-astor DEPS_SOURCE=rta."
+    echo "# Source: program-repair/RepairThemAll @ ${COMMIT} data/benchmarks/defects4j/*.json"
+    echo "# Rows: <Project> cp <max_bug_id> <workdir entries>  |  <Project> lib <jar name>"
+    for f in "$SRC"/*.json; do
+        jq -r '.project as $p
+               | (.classpath | to_entries[] | [$p, "cp", .key, .value] | @tsv),
+                 (.libs[]? | [$p, "lib", .] | @tsv)' "$f"
+    done | sort -t$'\t' -k1,1 -k2,2 -k3,3n
+} > "$OUT"
+echo "wrote resources/rta-classpath.tsv ($(grep -cv '^#' "$OUT") rows, pinned @ ${COMMIT:0:10})"

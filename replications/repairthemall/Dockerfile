@@ -36,10 +36,13 @@ ENV ASTOR_HOME=/opt/astor
 # jtestex7.jar must precede astor.jar on the classpath at runtime.
 # d4j-compliance.tsv lets run-astor pass each bug's Defects4J source compliance to
 # -javacompliancelevel, matching the experiment's per-bug invocation.
+# rta-classpath.tsv drives run-astor's default -dependencies construction, which
+# replicates RepairThemAll's own classpath algorithm.
 # -----------------------------------------------------------------------------
 COPY resources/astor.jar          /opt/astor/astor.jar
 COPY resources/jtestex7.jar       /opt/astor/lib/jtestex7.jar
 COPY resources/d4j-compliance.tsv /opt/astor/d4j-compliance.tsv
+COPY resources/rta-classpath.tsv  /opt/astor/rta-classpath.tsv
 COPY resources/run-astor          /usr/local/bin/run-astor
 RUN chmod +x /usr/local/bin/run-astor
 

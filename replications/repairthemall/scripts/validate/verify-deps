@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""verify-deps [--bugs A,B | all reference bugs] [--mode jGenProg] [--image TAG]
+
+Check -- WITHOUT running Astor -- that run-astor's DEPS_SOURCE=rta classpath
+reconstruction reproduces the dependency set of the published experiment, bug by
+bug. For each bug it runs the container with DEPS_DRYRUN=1 (checkout + DEPS
+computation only, ~seconds instead of hours), extracts the jar basenames, and
+compares them against the -dependencies recorded in the published repair.log
+(reference/Defects4J/<P>/<B>/<mode>/*/repair.log; fetched by
+scripts/reference/sync-reference-results). Same set-of-basenames comparison as
+validate-replication's LOG deps tier.
+
+Options:
+  --bugs A,B     subset (default: every bug present in reference/ for --mode)
+  --mode M       reference mode dir to compare against (default jGenProg;
+                 the classpath does not depend on the mode)
+  --image TAG    container image (default astor:1.4.0)
+  --csv FILE     also write a per-bug csv
+  --keep-going   default; --fail-fast stops at the first diff
+Exit: 0 if every compared bug matches, 1 otherwise (missing ref logs are
+reported and skipped, they do not fail the check).
+"""
+import argparse
+import csv
+import glob
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+REPL_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REF = os.path.join(REPL_DIR, "reference", "Defects4J")
+
+# same markers as validate-replication's parse_log
+_P_RE = re.compile(r"p:(\w+)=\s?(.*?)\s*$", re.M)
+_CLI_RE = re.compile(r"command line arguments:\s*\[(.*)\]")
+_DRYRUN_RE = re.compile(r"^\[\*\] DEPS:\s*(.*)$", re.M)
+
+
+def _jars(depstr):
+    return sorted({os.path.basename(p) for p in (depstr or "").split(":")
+                   if p.strip().endswith(".jar")})
+
+
+def ref_deps(project, bug, mode):
+    """Jar basenames of the published run's -dependencies, or None if no log."""
+    for log in sorted(glob.glob(os.path.join(REF, project, bug, mode, "*", "repair.log"))):
+        with open(log, errors="replace") as fd:
+            text = fd.read()
+        for m in _P_RE.finditer(text):
+            if m.group(1).lower() == "dependenciespath":
+                return _jars(m.group(2))
+        mc = _CLI_RE.search(text)
+        if mc:
+            toks = mc.group(1).split()
+            for i, t in enumerate(toks):
+                if t.lstrip("-").lower() == "dependencies" and i + 1 < len(toks):
+                    return _jars(toks[i + 1])
+        # RepairThemAll wrote the shell command into the log before running it,
+        # so the raw `-dependencies <cp>` is there even for crashed runs.
+        mr = re.search(r"-dependencies\s+(\S+)", text)
+        if mr:
+            return _jars(mr.group(1))
+    return None
+
+
+def local_deps(bug, image, engine, run_opts, vol_suffix):
+    """Run the container in DEPS_DRYRUN mode and return the jar basenames."""
+    cmd = [engine, "run", "--rm"] + run_opts + [
+        "-e", "DEPS_DRYRUN=1",
+        "-v", "%s/work:/work%s" % (REPL_DIR, vol_suffix),
+        image, "run-astor", bug]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    m = _DRYRUN_RE.search(out.stdout or "")
+    if out.returncode != 0 or not m:
+        return None, (out.stdout or "") + (out.stderr or "")
+    return _jars(m.group(1)), None
+
+
+def rm_scratch(engine, paths):
+    if engine == "podman":
+        subprocess.run([engine, "unshare", "rm", "-rf"] + paths,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for p in paths:
+        shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else \
+            (os.path.exists(p) and os.remove(p))
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--bugs")
+    ap.add_argument("--mode", default="jGenProg")
+    ap.add_argument("--image", default="astor:1.4.0")
+    ap.add_argument("--csv")
+    ap.add_argument("--fail-fast", action="store_true")
+    ap.add_argument("-h", "--help", action="store_true")
+    args = ap.parse_args()
+    if args.help:
+        print(__doc__)
+        return 0
+
+    engine = os.environ.get("ENGINE") or (
+        "podman" if shutil.which("podman") else "docker")
+    vol_suffix = os.environ.get("VOL_SUFFIX", ":z")
+    if "RUN_OPTS" in os.environ:
+        run_opts = os.environ["RUN_OPTS"].split()
+    elif engine == "podman":
+        run_opts = ["--userns=keep-id"]
+    else:
+        run_opts = ["--user", "%d:%d" % (os.getuid(), os.getgid())]
+
+    if args.bugs:
+        bugs = [b.strip() for b in args.bugs.split(",") if b.strip()]
+    else:
+        bugs = sorted(
+            ("%s-%s" % (p, b) for p, b, m in (
+                d.split(os.sep)[-3:] for d in glob.glob(
+                    os.path.join(REF, "*", "*", args.mode)))),
+            key=lambda s: (s.split("-")[0], int(s.split("-")[1])))
+    if not bugs:
+        sys.exit("no bugs found under %s for mode %s" % (REF, args.mode))
+
+    print("[verify-deps] %s %s | mode=%s | %d bug(s)"
+          % (engine, args.image, args.mode, len(bugs)))
+    rows, match, diff, skipped = [], 0, 0, 0
+    for bug in bugs:
+        project, bid = bug.split("-", 1)
+        ref = ref_deps(project, bid, args.mode)
+        if ref is None:
+            print("%-14s SKIP (no reference repair.log -- run "
+                  "scripts/reference/sync-reference-results)" % bug)
+            skipped += 1
+            rows.append((project, bid, "skip", "", ""))
+            continue
+        local, err = local_deps(bug, args.image, engine, run_opts, vol_suffix)
+        rm_scratch(engine, [os.path.join(REPL_DIR, "work", project, bid),
+                            os.path.join(REPL_DIR, "work", project, bid + "-astor.log")])
+        if local is None:
+            print("%-14s ERROR (dry-run failed)" % bug)
+            if err:
+                print("    " + "\n    ".join(err.strip().splitlines()[-5:]))
+            diff += 1
+            rows.append((project, bid, "error", "", ""))
+        elif set(local) == set(ref):
+            print("%-14s match (%d jars)" % (bug, len(ref)))
+            match += 1
+            rows.append((project, bid, "match", "", ""))
+        else:
+            missing = sorted(set(ref) - set(local))
+            extra = sorted(set(local) - set(ref))
+            print("%-14s DIFF  missing=%s extra=%s" % (bug, missing, extra))
+            diff += 1
+            rows.append((project, bid, "diff",
+                         ";".join(missing), ";".join(extra)))
+        if diff and args.fail_fast:
+            break
+
+    print("[verify-deps] match=%d diff/error=%d skipped=%d of %d"
+          % (match, diff, skipped, len(bugs)))
+    if args.csv:
+        with open(args.csv, "w", newline="") as fd:
+            w = csv.writer(fd)
+            w.writerow(["project", "bug", "state", "missing_vs_ref", "extra_vs_ref"])
+            w.writerows(rows)
+        print("[verify-deps] wrote %s" % args.csv)
+    return 1 if diff else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

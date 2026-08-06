@@ -1,0 +1,13 @@
+# Manual root-cause tags for replication mismatches. validate-replication auto-derives a
+# tag for every mismatch from the LOG/EXACT diff; an entry here OVERRIDES that suggestion
+# (tag_source becomes "manual"). Only add rows you have actually investigated.
+#
+# tag format: P<nn>_S<nn>[-E<nn>[+E<nn>...]]  (fixed width; sort E ascending)
+#   P = root cause (earliest divergence): P01 param  P02 dependency/env  P03 fault-loc
+#       P04 search-divergence (jar-sweep target)  P05 nondeterminism  P06 documented-upstream
+#       P07 upstream-no-result  P09 unexplained
+#   S = symptom: S01 outcome  S02 patch  S03 trajectory  S08 missing-local  S09 ref-no-result
+#   E = evidence: E01 params E02 deps E03 susp E04 line_susp E05 fail_tests E06 exact-fields
+# Use P05/P06 here -- they cannot be auto-derived (need a re-run / external knowledge).
+#
+project,bug,mode,tag,note

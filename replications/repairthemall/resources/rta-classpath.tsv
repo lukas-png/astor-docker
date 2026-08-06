@@ -1,0 +1,57 @@
+# RepairThemAll Defects4J.classpath() inputs per project, for run-astor DEPS_SOURCE=rta.
+# Source: program-repair/RepairThemAll @ 195df8e068cfbbeb0a0f1126a2e1bef51fbefdba data/benchmarks/defects4j/*.json
+# Rows: <Project> cp <max_bug_id> <workdir entries>  |  <Project> lib <jar name>
+Chart	cp	26	build/:build-tests/
+Chart	lib	cobertura-lib/servlet-api-2.5-6.1.14.jar
+Chart	lib	servlet.jar
+Closure	cp	63	build/classes:build/test:build/lib/rhino.jar
+Closure	cp	106	build/classes:build/test
+Closure	cp	133	build/classes:build/test:build/lib/rhino.jar
+Closure	lib	ant_deploy.jar
+Closure	lib	ant.jar
+Closure	lib	ant-launcher.jar
+Closure	lib	args4j_deploy.jar
+Closure	lib	args4j.jar
+Closure	lib	caja-r4314.jar
+Closure	lib	google_common_deploy.jar
+Closure	lib	google_compiled_protos_deploy.jar
+Closure	lib	guava.jar
+Closure	lib	guava-r06.jar
+Closure	lib	hamcrest-core-1.1.jar
+Closure	lib	jarjar.jar
+Closure	lib	json.jar
+Closure	lib	jsr305.jar
+Closure	lib	junit4-core.jar
+Closure	lib	junit4-legacy.jar
+Closure	lib	junit.jar
+Closure	lib	libtrunk_rhino_parser_jarjared.jar
+Closure	lib	protobuf_deploy.jar
+Closure	lib	protobuf-java-2.3.0.jar
+Closure	lib	protobuf-java.jar
+Lang	cp	20	target/classes/:target/tests/
+Lang	cp	41	target/classes/:target/test-classes/
+Lang	cp	66	target/classes/:target/tests/
+Lang	lib	asm.jar
+Lang	lib	cglib.jar
+Lang	lib	commons-io.jar
+Lang	lib	easymock-2.5.2.jar
+Math	cp	106	target/classes/:target/test-classes/
+Math	lib	commons-discovery-0.5.jar
+Mockito	cp	11	build/classes/main/:build/classes/test/
+Mockito	cp	17	target/classes:target/test-classes
+Mockito	cp	21	build/classes/main/:build/classes/test/
+Mockito	cp	38	target/classes:target/test-classes
+Mockito	lib	amcrest-core-1.1.jar
+Mockito	lib	asm-all-5.0.4.jar
+Mockito	lib	assertj-core-2.1.0.jar
+Mockito	lib	cglib-and-asm-1.0.jar
+Mockito	lib	cobertura-2.0.3.jar
+Mockito	lib	fest-assert-1.3.jar
+Mockito	lib	fest-util-1.1.4.jar
+Mockito	lib	hamcrest-all-1.3.jar
+Mockito	lib	objenesis-2.1.jar
+Mockito	lib	objenesis-2.2.jar
+Mockito	lib	powermock-reflect-1.2.5.jar
+Time	cp	11	target/classes/:target/test-classes/
+Time	cp	27	build/classes/:build/tests/
+Time	lib	joda-convert-1.2.jar
