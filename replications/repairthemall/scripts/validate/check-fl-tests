@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""check-fl-tests [--source ref|local|both] [--results-root DIR] [--bugs A,B]
+                [--modes M] [--csv FILE] [--show N]
+
+Compare, per bug, the failing tests GZoltar saw during fault localization
+against Defects4J's trigger tests. Astor logs every failing test case as
+"Test failt: <FQClass>#<method>" and computes the suspiciousness from exactly
+that set; Defects4J records the tests that must fail on the buggy version in
+framework/projects/<P>/trigger_tests/<bug> (mirrored into
+reference/d4j-trigger-tests.tsv by scripts/reference/gen-d4j-trigger-tests).
+
+Per-bug state:
+  MATCH    observed set == trigger set
+  MISSING  a trigger test did not fail during FL
+  EXTRA    tests failed that Defects4J does not list
+  BOTH     missing and extra at once
+  NO_FL    no FL marker in the log (run died before/inside localization)
+
+Extras are counted separately for the trigger tests' own classes and for other
+classes; only the latter move suspiciousness into unrelated files. Names are
+compared as a set -- the "fails: n" counter counts TestResults and is larger
+wherever GZoltar reports the same test twice.
+
+Sources: the published reference logs (reference/Defects4J/<P>/<bug>/<mode>/0/
+repair.log) and local runs (results/<P>-<bug>/<mode>/astor.log); --results-root
+scores another results tree, e.g. one synced off the batch host.
+Report-only: exits non-zero only if no log was found at all.
+"""
+import argparse
+import csv
+import os
+import re
+import sys
+from collections import Counter, defaultdict
+
+MODES = ["jGenProg", "jKali", "jMutRepair", "Cardumen"]
+
+_FAILTEST_RE = re.compile(r"Test failt:\s*(\S+)")
+_GZ_TOTALS_RE = re.compile(r"Gzoltar Test Result Total:(\d+),\s*fails:\s*(\d+)")
+_GZ_FOUND_RE = re.compile(r"Gzoltar found:\s*(\d+) with susp")
+_FAILING_PARAM_RE = re.compile(r"p:failing=\s*(\S*)")
+
+
+def parse_log(path):
+    """Failing tests GZoltar saw, plus the counters logged next to them."""
+    try:
+        with open(path, errors="replace") as fd:
+            text = fd.read()
+    except IOError:
+        return None
+    observed = {t.replace("#", "::") for t in _FAILTEST_RE.findall(text)}
+    totals = _GZ_TOTALS_RE.search(text)
+    found = _GZ_FOUND_RE.search(text)
+    failing_param = _FAILING_PARAM_RE.search(text)
+    return {
+        "observed": observed,
+        "gz_total": int(totals.group(1)) if totals else None,
+        "gz_fails": int(totals.group(2)) if totals else None,
+        "gz_susp": int(found.group(1)) if found else None,
+        "has_fl": bool(totals or observed),
+        "failing_param": set(failing_param.group(1).split(":")) - {""}
+        if failing_param else set(),
+    }
+
+
+def load_truth(base):
+    """(project, bug) -> set of Defects4J trigger tests."""
+    path = os.path.join(base, "reference", "d4j-trigger-tests.tsv")
+    truth = defaultdict(set)
+    try:
+        with open(path) as fd:
+            for line in fd:
+                if line.startswith("#") or not line.strip():
+                    continue
+                project, bug, test = line.rstrip("\n").split("\t")
+                truth[(project, bug)].add(test)
+    except IOError:
+        sys.exit("no %s (run scripts/reference/gen-d4j-trigger-tests)" % path)
+    return truth
+
+
+def classify(expected, log):
+    if log is None:
+        return "NO_LOG", set(), set()
+    if not log["has_fl"]:
+        return "NO_FL", set(), set()
+    missing = expected - log["observed"]
+    extra = log["observed"] - expected
+    if missing and extra:
+        state = "BOTH"
+    elif missing:
+        state = "MISSING"
+    elif extra:
+        state = "EXTRA"
+    else:
+        state = "MATCH"
+    return state, missing, extra
+
+
+def cls(test):
+    return test.split("::")[0]
+
+
+def cap(tests, n=10):
+    """Sorted and truncated: a suite that breaks wholesale fails thousands."""
+    listed = sorted(tests)
+    return ";".join(listed[:n]) + ("...(+%d)" % (len(listed) - n) if len(listed) > n else "")
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Compare GZoltar's failing tests against Defects4J's trigger tests.")
+    ap.add_argument("--modes", default="jGenProg",
+                    help="comma-separated, or 'all' (default jGenProg)")
+    ap.add_argument("--source", default="both", choices=["ref", "local", "both"],
+                    help="published reference logs, our runs, or both (default)")
+    ap.add_argument("--results-root", help="alternative results/ tree (e.g. synced from the batch host)")
+    ap.add_argument("--bugs", help="restrict to Project-Bug[,...]")
+    ap.add_argument("--csv", help="write a per-bug row here")
+    ap.add_argument("--show", type=int, default=40, help="max mismatches listed per source")
+    args = ap.parse_args()
+
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ref_root = os.path.join(base, "reference", "Defects4J")
+    res_root = args.results_root or os.path.join(base, "results")
+    modes = MODES if args.modes == "all" else [m.strip() for m in args.modes.split(",")]
+    only = {b.strip() for b in args.bugs.split(",")} if args.bugs else None
+    truth = load_truth(base)
+
+    rows = []
+    for (project, bug), expected in sorted(truth.items(), key=lambda kv: (kv[0][0], int(kv[0][1]))):
+        if only and "%s-%s" % (project, bug) not in only:
+            continue
+        for mode in modes:
+            sources = []
+            if args.source in ("ref", "both"):
+                sources.append(("ref", os.path.join(ref_root, project, bug, mode, "0", "repair.log")))
+            if args.source in ("local", "both"):
+                sources.append(("local", os.path.join(res_root, "%s-%s" % (project, bug), mode, "astor.log")))
+            for side, path in sources:
+                if not os.path.exists(path):
+                    continue
+                log = parse_log(path)
+                state, missing, extra = classify(expected, log)
+                rows.append({
+                    "side": side, "project": project, "bug": bug, "mode": mode,
+                    "state": state,
+                    "n_expected": len(expected),
+                    "n_observed": len(log["observed"]),
+                    "gz_fails": log["gz_fails"],
+                    "gz_total": log["gz_total"],
+                    "gz_susp": log["gz_susp"],
+                    "n_missing": len(missing),
+                    "n_extra": len(extra),
+                    "missing": cap(missing),
+                    "extra": cap(extra),
+                    "extra_same_class": len([e for e in extra if cls(e) in {cls(t) for t in expected}]),
+                    "extra_other_class": len([e for e in extra if cls(e) not in {cls(t) for t in expected}]),
+                    "failing_param_ok": int(
+                        {cls(t) for t in expected} == log["failing_param"]) if log["failing_param"] else "",
+                })
+
+    if not rows:
+        sys.exit("no logs found (checked %s)" % res_root)
+
+    for side in ("ref", "local"):
+        side_rows = [r for r in rows if r["side"] == side]
+        if not side_rows:
+            continue
+        counts = Counter(r["state"] for r in side_rows)
+        label = "published reference" if side == "ref" else res_root
+        print("\n=== %s: %d logs ===" % (label, len(side_rows)))
+        for state in ("MATCH", "EXTRA", "MISSING", "BOTH", "NO_FL"):
+            if counts[state]:
+                print("  %-8s %4d  %5.1f%%" % (state, counts[state],
+                                               100.0 * counts[state] / len(side_rows)))
+        # "fails: n" > distinct names: GZoltar reported a test more than once.
+        odd = [r for r in side_rows
+               if r["gz_fails"] is not None and r["gz_fails"] != r["n_observed"]]
+        if odd:
+            print("  (%d logs where 'fails: n' != number of 'Test failt' lines)" % len(odd))
+        shown = 0
+        for r in side_rows:
+            if r["state"] == "MATCH":
+                continue
+            if shown >= args.show:
+                print("  ... %d more" % (len([x for x in side_rows if x["state"] != "MATCH"]) - shown))
+                break
+            print("  %-9s %-12s exp=%d obs=%s%s%s" % (
+                r["state"], "%s-%s" % (r["project"], r["bug"]), r["n_expected"],
+                r["n_observed"],
+                "  -missing " + r["missing"] if r["missing"] else "",
+                "  +extra(%d same-class/%d other) %s" % (
+                    r["extra_same_class"], r["extra_other_class"],
+                    r["extra"][:160]) if r["extra"] else ""))
+            shown += 1
+
+    if args.csv:
+        with open(args.csv, "w", newline="") as fd:
+            w = csv.DictWriter(fd, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+        print("\nwrote %s (%d rows)" % (args.csv, len(rows)))
+
+
+if __name__ == "__main__":
+    main()

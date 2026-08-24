@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# gen-d4j-trigger-tests [image]
+#
+# Regenerate reference/d4j-trigger-tests.tsv by reading
+# framework/projects/<P>/trigger_tests/<bug> out of the image (the same
+# Defects4J v1.4.0 the runs use). Each of those files starts every failing test
+# with a "--- <FQClass>::<method>" header, followed by its stack trace.
+#
+# Row format (tab-separated):  <Project>  <bug>  <FQClass>::<method>
+# One row per trigger test; a bug with k trigger tests has k rows.
+#
+# scripts/validate/check-fl-tests compares this against the "Test failt:" lines
+# GZoltar writes into the run logs.
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+IMAGE="${1:-astor:1.4.0}"
+OUT="$REPL_DIR/reference/d4j-trigger-tests.tsv"
+ENGINE="$(command -v podman >/dev/null && echo podman || echo docker)"
+
+{
+    echo "# Defects4J trigger tests (framework/projects/<P>/trigger_tests/<bug>), image $IMAGE."
+    echo "# Regenerate with scripts/reference/gen-d4j-trigger-tests."
+    echo -e "#project\tbug\ttrigger_test"
+    "$ENGINE" run --rm "$IMAGE" bash -c '
+        cd /opt/defects4j/framework/projects
+        for p in Chart Closure Lang Math Mockito Time; do
+            for f in "$p"/trigger_tests/*; do
+                sed -n "s/^--- //p" "$f" | sed "s|^|$p\t$(basename "$f")\t|"
+            done
+        done' | sort -t$'\t' -k1,1 -k2,2n -k3,3
+} > "$OUT"
+
+echo "[gen-d4j-trigger-tests] $(grep -vc '^#' "$OUT") trigger tests -> ${OUT#$REPL_DIR/}"
