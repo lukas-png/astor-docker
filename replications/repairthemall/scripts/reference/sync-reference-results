@@ -3,8 +3,9 @@
 #
 # Refresh reference/Defects4J/ from the published RepairThemAll_experiment, pinned
 # to one commit. Keeps, for the four Astor modes, result.json + detailed-result.json
-# and the run logs beside them (repair.log, grid5k.stderr.log) The
+# and the run logs beside them (repair.log, grid5k.stderr.log). The
 # subset is committed; re-running must produce no diff unless the pin is bumped.
+
 set -euo pipefail
 
 REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -28,21 +29,17 @@ git sparse-checkout set --no-cone "${patterns[@]}" >/dev/null
 git -c advice.detachedHead=false checkout --quiet "$COMMIT"
 
 rm -rf "$DEST"; mkdir -p "$DEST"
-n=0
-declare -A seen_dir
-while IFS= read -r -d '' f; do
-    rel="${f#results/Defects4J/}"
-    dir="$(dirname "$rel")"
-    mkdir -p "$DEST/$dir"
-    cp -f "$f" "$DEST/$rel"; n=$((n + 1))
-    seen_dir["$dir"]=1
-done < <(find results/Defects4J -type f \( -name result.json -o -name detailed-result.json \) -print0)
+copy() {   
+    local count=0 f rel
+    while IFS= read -r -d '' f; do
+        rel="${f#results/Defects4J/}"
+        mkdir -p "$DEST/$(dirname "$rel")"
+        cp -f "$f" "$DEST/$rel"; count=$((count + 1))
+    done < <(find results/Defects4J -type f "$@" -print0)
+    echo "$count"
+}
 
-logs=0
-for dir in "${!seen_dir[@]}"; do
-    for lg in repair.log grid5k.stderr.log; do
-        [ -f "results/Defects4J/$dir/$lg" ] || continue
-        cp -f "results/Defects4J/$dir/$lg" "$DEST/$dir/$lg"; logs=$((logs + 1))
-    done
-done
+n="$(copy \( -name result.json -o -name detailed-result.json \))"
+
+logs="$(copy \( -name repair.log -o -name grid5k.stderr.log \))"
 echo "synced $n result files + $logs log files -> reference/Defects4J  (pinned @ ${COMMIT:0:10})"

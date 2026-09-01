@@ -186,8 +186,11 @@ def main():
             if shown >= args.show:
                 print("  ... %d more" % (len([x for x in side_rows if x["state"] != "MATCH"]) - shown))
                 break
-            print("  %-9s %-12s exp=%d obs=%s%s%s" % (
-                r["state"], "%s-%s" % (r["project"], r["bug"]), r["n_expected"],
+            bug = "%s-%s" % (r["project"], r["bug"])
+            if len(modes) > 1:
+                bug += "/" + r["mode"]
+            print("  %-9s %-22s exp=%d obs=%s%s%s" % (
+                r["state"], bug, r["n_expected"],
                 r["n_observed"],
                 "  -missing " + r["missing"] if r["missing"] else "",
                 "  +extra(%d same-class/%d other) %s" % (
