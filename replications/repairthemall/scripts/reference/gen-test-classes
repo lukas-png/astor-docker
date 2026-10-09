@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# gen-test-classes [--bugs P-B,...] [image]
+#
+# Regenerate reference/test-classes.tsv: per bug, the test classes Astor's own
+# finder discovers versus Defects4J's `export -p tests.all`. Each bug is checked
+# out and compiled (Java 7, as in run-astor), then ListTestClasses.java calls the
+# pinned astor.jar's TestClassesFinder on `export -p cp.test` -- the same filter
+# that produces the "from N classes with test cases" line in every run log.
+# Astor logs N = 2 x this list: the checkout's build dirs are on -dependencies AND
+# copied into output_astor/bin/default, so every class is found twice.
+#
+# Row format (tab-separated):
+#   project  bug  n_astor  n_d4j  astor_only  d4j_only
+# astor_only / d4j_only are ';'-joined class names ("" when empty); n_astor is
+# "NA" if the checkout or compile failed.
+#
+# ~30 s per bug (checkout + compile); all 395 bugs take a few hours -- run it
+# under nohup. Resumable: bugs already in the .partial file are skipped.
+#
+# scripts/validate/check-test-classes compares this against the run logs.
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BUGS=""
+if [ "${1:-}" = --bugs ]; then BUGS="${2:?--bugs needs P-B[,P-B...]}"; shift 2; fi
+IMAGE="${1:-astor:1.4.0}"
+OUT="$REPL_DIR/reference/test-classes.tsv"
+PARTIAL="$OUT.partial"
+ENGINE="$(command -v podman >/dev/null && echo podman || echo docker)"
+
+# Default: every bug Defects4J has trigger tests for (the full 395).
+if [ -z "$BUGS" ]; then
+    BUGS="$(awk -F'\t' '!/^#/ {print $1"-"$2}' "$REPL_DIR/reference/d4j-trigger-tests.tsv" | sort -u | paste -sd,)"
+fi
+touch "$PARTIAL"
+TODO="$(tr ',' '\n' <<<"$BUGS" | while read -r b; do
+    awk -F'\t' -v p="${b%-*}" -v n="${b#*-}" '$1==p && $2==n {f=1} END {exit !f}' "$PARTIAL" || echo "$b"
+done | paste -sd' ')"
+echo "[gen-test-classes] $(wc -w <<<"$TODO") bug(s) to do, $(wc -l <"$PARTIAL") already done"
+
+if [ -n "$TODO" ]; then
+    "$ENGINE" run --rm \
+        -v "$REPL_DIR/resources/astor.jar:/astor.jar:ro,Z" \
+        -v "$REPL_DIR/scripts/reference/ListTestClasses.java:/ltc/ListTestClasses.java:ro,Z" \
+        "$IMAGE" bash -c '
+        J8="$JAVA8_HOME/bin"
+        mkdir -p /tmp/ltc && "$J8/javac" -nowarn -d /tmp/ltc -cp /astor.jar /ltc/ListTestClasses.java
+        export JAVA_HOME="$JAVA7_HOME" PATH="$JAVA7_HOME/bin:$PATH"
+        for b in '"$TODO"'; do
+            p="${b%-*}" n="${b#*-}" w="/tmp/w/$b"; mkdir -p /tmp/w
+            if defects4j checkout -p "$p" -v "${n}b" -w "$w" >/dev/null 2>&1 \
+               && (cd "$w" && defects4j compile >/dev/null 2>&1); then
+                cd "$w"
+                "$J8/java" -cp /astor.jar:/tmp/ltc ListTestClasses \
+                    "$(defects4j export -p cp.test 2>/dev/null)" 2>/dev/null | sort -u > /tmp/astor
+                defects4j export -p tests.all 2>/dev/null | sort -u > /tmp/d4j
+                printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$p" "$n" \
+                    "$(wc -l </tmp/astor)" "$(wc -l </tmp/d4j)" \
+                    "$(comm -23 /tmp/astor /tmp/d4j | paste -sd";")" \
+                    "$(comm -13 /tmp/astor /tmp/d4j | paste -sd";")"
+                cd /
+            else
+                printf "%s\t%s\tNA\tNA\t\t\n" "$p" "$n"
+            fi
+            rm -rf "$w"
+            echo "[gen-test-classes] $b" >&2
+        done' >> "$PARTIAL"
+fi
+
+{
+    echo "# Test classes per bug: Astor's TestClassesFinder (pinned astor.jar) vs Defects4J tests.all, image $IMAGE."
+    echo "# Run logs report 2 x n_astor. Regenerate with scripts/reference/gen-test-classes."
+    echo -e "#project\tbug\tn_astor\tn_d4j\tastor_only\td4j_only"
+    sort -t$'\t' -k1,1 -k2,2n "$PARTIAL"
+} > "$OUT"
+echo "[gen-test-classes] $(grep -vc '^#' "$OUT") bug(s) -> ${OUT#$REPL_DIR/}"

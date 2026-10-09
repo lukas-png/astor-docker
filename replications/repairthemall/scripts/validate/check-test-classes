@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""check-test-classes [--source ref|local|both] [--results-root DIR] [--bugs A,B]
+                     [--modes M] [--csv FILE] [--show N]
+
+Compare, per bug, how many test classes Astor ran GZoltar on against what the
+pinned astor.jar's own finder discovers on a clean Defects4J checkout. Astor
+logs only the count ("-Executing Gzoltar classpath: ... from N classes with
+test cases"), never the names; reference/test-classes.tsv (written by
+scripts/reference/gen-test-classes) holds the finder's list size per bug and
+how it differs from Defects4J's `export -p tests.all`.
+
+The log reports every class twice: the checkout's build dirs are on
+-dependencies and are also copied into output_astor/bin/default, and the
+finder walks both. So the expected count is 2 x n_astor.
+
+Per-log state:
+  MATCH    logged count == 2 x n_astor
+  DIFF     logged count differs (classpath, compile or finder drift)
+  NO_FL    no count in the log (run died before fault localization)
+  NO_REF   bug missing from test-classes.tsv, or its row is NA
+
+Independently of the logs, the second section lists bugs where Astor's finder
+misses classes Defects4J runs (d4j_only) -- these tests can never fail during
+fault localization -- and summarises the classes Astor runs but Defects4J does
+not (astor_only: *PackageTests aggregate suites, classes the project build
+excludes).
+
+Sources: the published reference logs (reference/Defects4J/<P>/<bug>/<mode>/0/
+repair.log) and local runs (results/<P>-<bug>/<mode>/astor.log); --results-root
+scores another results tree, e.g. one synced off the batch host.
+Report-only: exits non-zero only if no log was found at all.
+"""
+import argparse
+import csv
+import os
+import re
+import sys
+from collections import Counter
+
+MODES = ["jGenProg", "jKali", "jMutRepair", "Cardumen"]
+
+_COUNT_RE = re.compile(r"from (\d+) classes with test cases")
+
+
+def logged_count(path):
+    try:
+        with open(path, errors="replace") as fd:
+            m = _COUNT_RE.search(fd.read())
+    except IOError:
+        return None
+    return int(m.group(1)) if m else None
+
+
+def load_truth(base):
+    """(project, bug) -> row of reference/test-classes.tsv."""
+    path = os.path.join(base, "reference", "test-classes.tsv")
+    truth = {}
+    try:
+        with open(path) as fd:
+            for line in fd:
+                if line.startswith("#") or not line.strip():
+                    continue
+                project, bug, n_astor, n_d4j, astor_only, d4j_only = line.rstrip("\n").split("\t")
+                truth[(project, bug)] = {
+                    "n_astor": None if n_astor == "NA" else int(n_astor),
+                    "n_d4j": None if n_d4j == "NA" else int(n_d4j),
+                    "astor_only": [c for c in astor_only.split(";") if c],
+                    "d4j_only": [c for c in d4j_only.split(";") if c],
+                }
+    except IOError:
+        sys.exit("no %s (run scripts/reference/gen-test-classes)" % path)
+    return truth
+
+
+def bug_key(name):
+    project, bug = name.split("-")
+    return project, int(bug)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Compare Astor's logged test-class count against its finder on a clean checkout.")
+    ap.add_argument("--modes", default="all",
+                    help="comma-separated, or 'all' (default; the count is mode-independent)")
+    ap.add_argument("--source", default="both", choices=["ref", "local", "both"],
+                    help="published reference logs, our runs, or both (default)")
+    ap.add_argument("--results-root", help="alternative results/ tree (e.g. synced from the batch host)")
+    ap.add_argument("--bugs", help="restrict to Project-Bug[,...]")
+    ap.add_argument("--csv", help="write a per-log row here")
+    ap.add_argument("--show", type=int, default=40, help="max mismatches listed per source")
+    args = ap.parse_args()
+
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ref_root = os.path.join(base, "reference", "Defects4J")
+    res_root = args.results_root or os.path.join(base, "results")
+    modes = MODES if args.modes == "all" else [m.strip() for m in args.modes.split(",")]
+    only = {b.strip() for b in args.bugs.split(",")} if args.bugs else None
+    truth = load_truth(base)
+
+    # Every bug that has either a truth row or a log, so NO_REF shows up too.
+    bugs = {"%s-%s" % k for k in truth}
+    if os.path.isdir(ref_root):
+        for project in os.listdir(ref_root):
+            for bug in os.listdir(os.path.join(ref_root, project)):
+                bugs.add("%s-%s" % (project, bug))
+    if os.path.isdir(res_root):
+        bugs.update(d for d in os.listdir(res_root) if re.match(r"^[A-Za-z]+-\d+$", d))
+    if only:
+        bugs &= only
+
+    rows = []
+    for name in sorted(bugs, key=bug_key):
+        project, bug = name.split("-")
+        t = truth.get((project, bug))
+        expected = 2 * t["n_astor"] if t and t["n_astor"] is not None else None
+        for mode in modes:
+            sources = []
+            if args.source in ("ref", "both"):
+                sources.append(("ref", os.path.join(ref_root, project, bug, mode, "0", "repair.log")))
+            if args.source in ("local", "both"):
+                sources.append(("local", os.path.join(res_root, name, mode, "astor.log")))
+            for side, path in sources:
+                if not os.path.exists(path):
+                    continue
+                logged = logged_count(path)
+                if logged is None:
+                    state = "NO_FL"
+                elif expected is None:
+                    state = "NO_REF"
+                elif logged == expected:
+                    state = "MATCH"
+                else:
+                    state = "DIFF"
+                rows.append({
+                    "side": side, "project": project, "bug": bug, "mode": mode,
+                    "state": state, "logged": logged, "expected": expected,
+                    "n_d4j": t["n_d4j"] if t else None,
+                })
+
+    if not rows:
+        sys.exit("no logs found (checked %s)" % res_root)
+
+    for side in ("ref", "local"):
+        side_rows = [r for r in rows if r["side"] == side]
+        if not side_rows:
+            continue
+        counts = Counter(r["state"] for r in side_rows)
+        label = "published reference" if side == "ref" else res_root
+        print("\n=== %s: %d logs ===" % (label, len(side_rows)))
+        for state in ("MATCH", "DIFF", "NO_FL", "NO_REF"):
+            if counts[state]:
+                print("  %-7s %4d  %5.1f%%" % (state, counts[state],
+                                              100.0 * counts[state] / len(side_rows)))
+        bad = [r for r in side_rows if r["state"] == "DIFF"]
+        for r in bad[:args.show]:
+            label = "%s-%s" % (r["project"], r["bug"])
+            if len(modes) > 1:
+                label += "/" + r["mode"]
+            print("  DIFF    %-22s logged=%d expected=%d (2x%d)  delta=%+d" % (
+                label, r["logged"], r["expected"], r["expected"] // 2, r["logged"] - r["expected"]))
+        if len(bad) > args.show:
+            print("  ... %d more" % (len(bad) - args.show))
+
+    # Log-independent: what Astor's finder sees versus Defects4J's test list.
+    scored = {"%s-%s" % (r["project"], r["bug"]) for r in rows}
+    known = [(k, t) for k, t in sorted(truth.items(), key=lambda kv: (kv[0][0], int(kv[0][1])))
+             if "%s-%s" % k in scored and t["n_astor"] is not None]
+    if known:
+        missing = [(k, t) for k, t in known if t["d4j_only"]]
+        extra = [(k, t) for k, t in known if t["astor_only"]]
+        print("\n=== Astor finder vs Defects4J tests.all: %d bugs ===" % len(known))
+        print("  identical sets       %4d" % (len(known) - len({k for k, _ in missing} | {k for k, _ in extra})))
+        print("  Astor misses classes %4d   (Defects4J runs them, GZoltar never does)" % len(missing))
+        for (project, bug), t in missing[:args.show]:
+            print("    %s-%s: %s" % (project, bug, ";".join(t["d4j_only"])[:160]))
+        print("  Astor runs extra     %4d" % len(extra))
+        suites = sum(1 for _, t in extra for c in t["astor_only"] if c.endswith("PackageTests"))
+        total = sum(len(t["astor_only"]) for _, t in extra)
+        if total:
+            print("    %d extra classes in total, %d of them *PackageTests aggregate suites" % (total, suites))
+
+    if args.csv:
+        with open(args.csv, "w", newline="") as fd:
+            w = csv.DictWriter(fd, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+        print("\nwrote %s (%d rows)" % (args.csv, len(rows)))
+
+
+if __name__ == "__main__":
+    main()
