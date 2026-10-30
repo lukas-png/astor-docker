@@ -15,6 +15,9 @@
 #                     Astor's own -maxtime still applies.
 #   --java-args "S" JVM args for Astor (else image default -Xmx4g -Xms1g)
 #
+# Env DEPS_SOURCE (rta|cp.test) and COMPLIANCE (n) are forwarded to run-astor
+# when set; unset, the image's run-astor default applies.
+#
 set -uo pipefail
 
 REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -46,6 +49,9 @@ else
 fi
 REF="$REPL_DIR/reference/Defects4J"
 LOGDIR="$REPL_DIR/logs"; mkdir -p "$LOGDIR"
+# Create the bind-mount source ourselves; if the engine creates it, it belongs to
+# root and run-astor's mkdir inside /work fails under keep-id/--user.
+mkdir -p "$REPL_DIR/work"
 
 # Engine-aware scratch removal. Rootless podman may map the container's writes to
 # a host root, so remove them via `podman unshare`; rootful docker keeps work/
@@ -98,6 +104,10 @@ for line in "${WORK[@]}"; do
     blog="$LOGDIR/${BUG}-${MODEDIR}.log"
     ENVS=(-e MODE="$amode" -e MAXTIME="$MAXTIME" -e SEED="$SEED")
     [[ -n "$JAVA_ARGS" ]] && ENVS+=(-e JAVA_ARGS="$JAVA_ARGS")
+    # Pass run-astor's arm switches through when set, so the arm is explicit in
+    # the call instead of whatever default the image's run-astor carries.
+    [[ -n "${DEPS_SOURCE:-}" ]] && ENVS+=(-e DEPS_SOURCE="$DEPS_SOURCE")
+    [[ -n "${COMPLIANCE:-}" ]] && ENVS+=(-e COMPLIANCE="$COMPLIANCE")
     run_cmd=("$ENGINE" run --rm $RUN_OPTS "${ENVS[@]}" \
              -v "$REPL_DIR/work:/work${VOL_SUFFIX}" "$IMAGE" run-astor "$BUG")
     if [[ "$HARD_TIMEOUT" -gt 0 ]]; then
@@ -117,9 +127,15 @@ for line in "${WORK[@]}"; do
         echo "FAILED (rc=$rc, see logs/${BUG}-${MODEDIR}.log)"; failed=$((failed+1))
     fi
 
-    # Bound scratch to one bug at a time. Results are already in results/ (on
-    # success) and the run's stdout is captured in logs/ (on failure/hang), so
-    # Astor's output_astor tree -- thousands of compiled variant-*/ dirs that
+    if [[ ! -f "$dest" ]]; then
+        resdir="$REPL_DIR/results/$BUG/$MODEDIR"; mkdir -p "$resdir"
+        cp -f "$blog" "$resdir/run.log"
+        [[ -f "$REPL_DIR/work/$PID/${BID}-astor.log" ]] && \
+            cp -f "$REPL_DIR/work/$PID/${BID}-astor.log" "$resdir/astor.log"
+    fi
+
+    # Bound scratch to one bug at a time. Results and logs are already in
+    # results/, so Astor's output_astor tree -- thousands of compiled variant-*/ dirs that
     # exhaust inodes if left to pile up -- is disposable. KEEP_WORK=1 retains it.
     [[ "$KEEP_WORK" == 1 ]] || rm_scratch "${stale[@]}"
 done

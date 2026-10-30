@@ -3,10 +3,10 @@
 #
 # Establishes, per Defects4J jGenProg bug, what the published RepairThemAll
 # experiment actually produced -- so the replication's out-of-scope set is
-# evidence-backed rather than inferred. sync-reference-results keeps only the
-# result JSONs; this additionally fetches the logs it skips (repair.log,
-# grid5k.stderr.log) for bugs that have NO result.json, reads the terminal
+# evidence-backed rather than inferred. It fetches repair.log and
+# grid5k.stderr.log for the bugs that have NO result.json, reads the terminal
 # outcome from them, and writes reference/coverage-jGenProg.csv (committed).
+#
 #
 # The upstream tree stores, per <Project>/<Bug>/jGenProg/0/:
 #   result.json + detailed-result.json  only when a parseable result was produced

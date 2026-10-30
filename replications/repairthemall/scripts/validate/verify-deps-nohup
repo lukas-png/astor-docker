@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# verify-deps-nohup [verify-deps args...]
+#
+# Detach scripts/validate/verify-deps into the background (one container dry-run
+# per reference bug, ~15-40 s each -- 1-2 h for the full set). NOT resumable:
+# re-running starts over from the first bug.
+#
+#   scripts/validate/verify-deps-nohup --csv ~/verify-deps.csv
+set -euo pipefail
+
+REPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOGDIR="$REPL_DIR/logs"; mkdir -p "$LOGDIR"
+ts="$(date +%Y%m%d-%H%M%S)"
+log="$LOGDIR/verify-deps-$ts.log"
+pidf="$LOGDIR/verify-deps-$ts.pid"
+
+setsid "$REPL_DIR/scripts/validate/verify-deps" "$@" > "$log" 2>&1 < /dev/null &
+pid=$!
+echo "$pid" > "$pidf"
+
+cat <<EOF
+[verify-deps-nohup] detached, pid $pid
+  log:    $log
+  follow: tail -f "$log"
+  result: tail -20 "$log"     # last line: match=.. diff/error=.. skipped=..
+  stop:   kill -- -$pid        # stops verify-deps and the running container
+EOF

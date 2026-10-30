@@ -49,7 +49,7 @@ WORK="/work/${PID}/${BID}"
 # -javacompliancelevel: match what RepairThemAll passed for this exact bug (its
 # Defects4J source compliance) instead of a fixed value, so Astor builds the
 # same Spoon model and reproduces the published search trajectory. Looked up from
-# the vendored table unless COMPLIANCE is set explicitly. Fallback 7 if unknown.
+# the vendored table unless COMPLIANCE is set explicitly.
 COMPLIANCE_TABLE="${COMPLIANCE_TABLE:-$ASTOR_HOME/d4j-compliance.tsv}"
 COMPLIANCE_SRC="d4j-compliance.tsv"
 if [ -n "${COMPLIANCE:-}" ]; then
@@ -57,7 +57,11 @@ if [ -n "${COMPLIANCE:-}" ]; then
 else
   COMPLIANCE="$(awk -F'\t' -v p="$PID" -v b="$BID" \
                   '$1==p && $2==b {print $3; exit}' "$COMPLIANCE_TABLE" 2>/dev/null || true)"
-  [ -n "$COMPLIANCE" ] || { COMPLIANCE=7; COMPLIANCE_SRC="fallback (no table entry)"; }
+  [ -n "$COMPLIANCE" ] || {
+    echo "[!] no compliance entry for $BUG in $COMPLIANCE_TABLE" >&2
+    echo "    regenerate it (scripts/reference/gen-compliance-table) or set COMPLIANCE=<n>" >&2
+    exit 2
+  }
 fi
 
 # Capture the whole run (checkout, compile, Astor) to a log file next to the bug

@@ -110,6 +110,12 @@ def main():
     else:
         run_opts = ["--user", "%d:%d" % (os.getuid(), os.getgid())]
 
+    work = os.path.join(REPL_DIR, "work")
+    os.makedirs(work, exist_ok=True)
+    if not os.access(work, os.W_OK):
+        sys.exit("%s is not writable by uid %d; remove it (podman unshare rm -rf "
+                 "work / sudo rm -rf work) and re-run" % (work, os.getuid()))
+
     if args.bugs:
         bugs = [b.strip() for b in args.bugs.split(",") if b.strip()]
     else:
