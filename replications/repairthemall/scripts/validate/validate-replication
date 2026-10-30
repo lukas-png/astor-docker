@@ -7,7 +7,9 @@ tiers (noise such as timestamps/paths/timing is ignored):
   OUTCOME    : same result (patched vs not), and the same {location, operator,
                original->patched code} when patched.
   TRAJECTORY : additionally identical NR_GENERATIONS / NR_RIGHT_COMPILATIONS /
-               NR_FAILLING_COMPILATIONS (deterministic run).
+               NR_FAILLING_COMPILATIONS (deterministic run). A null counter is read
+               as the 0 it means -- Astor only creates a counter on its first
+               increment and writes null for the ones it never touched.
   EXACT      : report-only. For patched bugs also the modification-point fields
                (LINE, SUSPICIOUNESS, MP_RANKING, the *_TYPE / INGREDIENT_*
                fields); for every bug general.OUTPUT_STATUS. Path/timestamp noise
@@ -16,6 +18,9 @@ tiers (noise such as timestamps/paths/timing is ignored):
                reference repair.log), not result.json: run parameters, Gzoltar
                suspiciousness, dependency jar-set, per-line suspiciousness. Bugs
                upstream produced no result for but we ran locally: REF_NO_RESULT.
+  counters   : report-only, outside the tiers. NR_FAILING_VALIDATION_PROCESS and the
+               decoded VALIDATION triple (successful, failures, cases executed); plus
+               tmax2 on both sides as a host-speed covariate, never an equality check.
 
 Prints match rates + any mismatch, writes a per-bug CSV (--csv) and/or a corpus
 summary JSON (--json), exits non-zero if any compared bug disagrees on OUTCOME
@@ -58,6 +63,22 @@ LOG_PARAM_KEYS = {
     "maxgeneration": ("maxgeneration", "maxgen"),
     "javacompliancelevel": ("javacompliancelevel",),
     "limitbysuspicious": ("limitbysuspicious",),
+    "stopfirst": ("stopfirst",),
+    # Fault localization: never passed by run-astor, so these are the pinned jar's
+    # defaults. Compared so "GZoltar ran with the same settings" is checked per bug
+    # instead of resting on the jar pin (see PARAMETERS.md section C).
+    "faultlocalization": ("faultlocalization",),
+    "flthreshold": ("flthreshold",),
+    "maxsuspcandidates": ("maxsuspcandidates",),
+    "filterfaultlocalization": ("filterfaultlocalization",),
+    "regressionforfaultlocalization": ("regressionforfaultlocalization",),
+    "considerzerovaluesusp": ("considerzerovaluesusp",),
+    "maxmodificationpoints": ("maxmodificationpoints",),
+    "modificationpointnavigation": ("modificationpointnavigation",),
+    # Validation timeouts: tmax1 is a fixed constant; overridemaxtime decides whether
+    # tmax2 is wall-clock-derived (tmax2 itself is a covariate, never compared).
+    "tmax1": ("tmax1",),
+    "overridemaxtime": ("overridemaxtime",),
 }
 _P_RE = re.compile(r"p:(\w+)=\s?(.*?)\s*$")
 _CLI_RE = re.compile(r"command line arguments:\s*\[(.*)\]")
@@ -69,11 +90,37 @@ _SUSP_RES = {
     "considered": re.compile(r"we consider:\s*(\d+)"),
     "initial_suspicious_size": re.compile(r"Initial suspicious size:\s*(\d+)"),
 }
-_LINESUSP_RE = re.compile(r"lineSuspiciousness=\s*([\d.]+)")
+# Per-operator block written by AstorCoreEngine.getSolutionData() for each SOLUTION:
+#     line= <n>
+#     lineSuspiciousness= <suspiciousness>      (only for a SuspiciousModificationPoint)
+#     lineSuspiciousness= <modification point index>
+# Astor prints two different quantities under the same marker, so the marker alone
+# cannot be scraped: the value right after a "line=" is the suspiciousness, the next
+# one is the modification-point index (== MP_RANKING). Grepping the marker blindly
+# mixes a suspiciousness with a rank index in the same multiset.
+_LINE_RE = re.compile(r"(?:^|\s)line=\s*(\d+)\s*$")
+_LINESUSP_RE = re.compile(r"(?:^|\s)lineSuspiciousness=\s*([\d.]+)\s*$")
 # The failing tests that drive fault localization. Astor prints the (mis-spelled)
 # marker "Test failt: <FQ Class#method>" per test, and a "fails: N" count.
 _FAILTEST_RE = re.compile(r"Test failt:\s*(\S+)")
 _FAILCOUNT_RE = re.compile(r"Test Result Total:\d+,\s*fails:\s*(\d+)")
+
+
+def _line_suspiciousness(text):
+    """(suspiciousness values, modification-point indices) from the solution blocks.
+
+    Both are printed under the "lineSuspiciousness=" marker; they are told apart by
+    position, since only the suspiciousness is preceded by "line=". Non-suspicious
+    modification points print the index alone."""
+    susp, ranks, prev_line = [], [], False
+    for ln in text.splitlines():
+        m = _LINESUSP_RE.search(ln)
+        if m:
+            (susp if prev_line else ranks).append(m.group(1))
+            prev_line = False
+            continue
+        prev_line = bool(_LINE_RE.search(ln))
+    return susp, ranks
 
 
 def _jars(depstr):
@@ -124,11 +171,19 @@ def parse_log(path):
         susp[k] = m.group(1) if m else None
     deps = _jars(p_vals.get("dependenciespath") or cli.get("dependencies"))
     fc = _FAILCOUNT_RE.search(text)
+    lsusp, lranks = _line_suspiciousness(text)
     return {"parameters": params, "suspiciousness": susp,
             "dependencies": deps,
-            "line_suspiciousness": _LINESUSP_RE.findall(text),
+            "line_suspiciousness": lsusp, "mp_ranking": lranks,
             "failing_tests": sorted(set(_FAILTEST_RE.findall(text))),
-            "fail_count": fc.group(1) if fc else None}
+            "fail_count": fc.group(1) if fc else None,
+            # Covariate, never an equality check: Astor overwrites tmax2 with 2x the
+            # measured duration of the initial test-suite run (overridemaxtime=true,
+            # AstorCoreEngine), so it is a wall-clock reading of the host. It bounds
+            # every later validation subprocess, which is how host speed can reach the
+            # search itself and not just the -maxtime budget. Logged on both sides.
+            # tmax1 is the contrast: a fixed 10s, so a diff there is a config change.
+            "tmax2": p_vals.get("tmax2"), "tmax1": p_vals.get("tmax1")}
 
 
 def log_compare(local_log, ref_log):
@@ -157,6 +212,8 @@ def log_compare(local_log, ref_log):
     if sdiff:
         detail.append("susp: " + "; ".join(sdiff))
 
+    # Solution-block measure: empty on both sides for unpatched runs, where it scores a
+    # vacuous match rather than evidence (see METRICS.md 4.4).
     lc, rc = Counter(local_log["line_suspiciousness"]), Counter(ref_log["line_suspiciousness"])
     states["line_susp"] = "match" if lc == rc else "diff"
     if lc != rc:
@@ -284,12 +341,40 @@ def exact_compare(local, ref):
     return ("diff", "hunk set differs (%d vs %d hunks)" % (len(lh), len(rh)))
 
 
+def counter(g, key):
+    v = g.get(key)
+    return 0 if v is None else v
+
+
 def trajectory(data):
     g = data.get("general")
     if not g:
         return None
-    v = (g.get("NR_GENERATIONS"), g.get("NR_RIGHT_COMPILATIONS"), g.get("NR_FAILLING_COMPILATIONS"))
-    return None if any(x is None for x in v) else v
+    return (counter(g, "NR_GENERATIONS"), counter(g, "NR_RIGHT_COMPILATIONS"),
+            counter(g, "NR_FAILLING_COMPILATIONS"))
+
+
+def val_failures(data):
+    g = data.get("general")
+    return None if not g else counter(g, "NR_FAILING_VALIDATION_PROCESS")
+
+
+# Astor writes PatchStatEnum.VALIDATION as ValidationResult.toString(); for the
+# test-case validator (TestCasesProgramValidationResult) that is
+#   |<wasSuccessful>|<failures>|<casesExecuted>|<failingTests>|
+# All four components are machine-independent, so the field is comparable rather than
+# noise -- casesExecuted is the size of the test suite that accepted the patch.
+_VALIDATION_RE = re.compile(r"^\|(\w+)\|(\d+)\|(\d+)\|")
+
+
+def validations(data):
+    """Multiset of decoded (successful, failures, cases executed) over a run's patches."""
+    out = []
+    for p in (data.get("patches") or []):
+        m = _VALIDATION_RE.match(str(p.get("VALIDATION") or ""))
+        if m:
+            out.append(m.groups())
+    return Counter(out)
 
 
 def summarize(data):
@@ -298,6 +383,7 @@ def summarize(data):
     ps = patch_set(data)
     return {"patched": len(ps) > 0, "patches": ps, "traj": trajectory(data),
             "status": (data.get("general") or {}).get("OUTPUT_STATUS"),
+            "valfail": val_failures(data), "validation": validations(data),
             "exact": exact_hunks(data)}
 
 
@@ -319,6 +405,32 @@ def classify(local, ref):
     if local["traj"] == ref["traj"]:
         return ("MATCH_TRAJECTORY", True, "match", exact_state, exact_diff)
     return ("MATCH_OUTCOME_TRAJ_DIFF", True, "diff", exact_state, exact_diff)
+
+
+def counter_compare(local, ref):
+    """Report-only states for the two general/patch fields outside the tiers:
+    NR_FAILING_VALIDATION_PROCESS and the decoded VALIDATION triple."""
+    if local is None:
+        return ("na", "na", "")
+    detail = []
+    lv, rv = local.get("valfail"), ref.get("valfail")
+    if lv is None or rv is None:
+        vf = "na"
+    elif lv == rv:
+        vf = "match"
+    else:
+        vf = "diff"
+        detail.append("valfail: local=%s ref=%s" % (lv, rv))
+    lval, rval = local.get("validation"), ref.get("validation")
+    if not lval and not rval:
+        va = "na"                      # unpatched on both sides: nothing to decode
+    elif lval == rval:
+        va = "match"
+    else:
+        va = "diff"
+        detail.append("validation: local=%s ref=%s"
+                      % (sorted(lval.elements()), sorted(rval.elements())))
+    return (vf, va, "; ".join(detail))
 
 
 def main():
@@ -361,6 +473,7 @@ def main():
                     if local is not None else None
                 ref_log = parse_log(os.path.join(seed, "repair.log"))
                 log_states, log_diff = log_compare(local_log, ref_log)
+                valfail_state, valid_state, counter_diff = counter_compare(local, ref)
                 auto_tag, _mm = derive_tag(klass, log_states, exact_state, traj)
                 man = lookup_tag(tags, project, bug, mode)
                 if man and man[0]:
@@ -381,6 +494,11 @@ def main():
                              "log_line_susp_state": log_states["line_susp"],
                              "log_fail_tests_state": log_states["fail_tests"],
                              "log_diff_fields": log_diff,
+                             "valfail_state": valfail_state,
+                             "validation_state": valid_state,
+                             "counter_diff_fields": counter_diff,
+                             "tmax2_ref": (ref_log or {}).get("tmax2"),
+                             "tmax2_local": (local_log or {}).get("tmax2"),
                              "tag": tag, "tag_source": tag_source, "tag_note": tag_note,
                              "upstream_status": cov.get((project, bug), (None, ""))[1]})
 
@@ -410,6 +528,11 @@ def main():
                          "log_susp_state": "na", "log_line_susp_state": "na",
                          "log_fail_tests_state": "na",
                          "log_diff_fields": "ref no result (upstream %s)" % status,
+                         "valfail_state": "na", "validation_state": "na",
+                         "counter_diff_fields": "",
+                         "tmax2_ref": None,
+                         "tmax2_local": (parse_log(os.path.join(local_dir, "astor.log"))
+                                         or {}).get("tmax2"),
                          "tag": tag, "tag_source": tag_source, "tag_note": tag_note,
                          "upstream_status": status})
 
@@ -440,10 +563,17 @@ def main():
     for field, label in (("log_params_state", "LOG params"),
                          ("log_deps_state", "LOG deps  "),
                          ("log_susp_state", "LOG susp  "),
-                         ("log_fail_tests_state", "LOG fails ")):
+                         ("log_fail_tests_state", "LOG fails "),
+                         ("valfail_state", "VAL fails "),
+                         ("validation_state", "VALIDATION")):
         m, d = log_rate(field)
         print("  %s identical: %d/%d  %s   (differ: %d, report-only)"
               % (label, m, d, pct(m, d), d - m))
+    ratios = sorted(float(r["tmax2_ref"]) / float(r["tmax2_local"]) for r in compared
+                    if r["tmax2_ref"] and r["tmax2_local"] and float(r["tmax2_local"]))
+    if ratios:
+        print("  tmax2 ref/local (host speed covariate, n=%d): median %.2fx, range %.2f-%.2fx"
+              % (len(ratios), ratios[len(ratios) // 2], ratios[0], ratios[-1]))
     if ref_no_result:
         print("  REF_NO_RESULT (upstream produced none, ran locally): %d" % len(ref_no_result))
     counts = {}
@@ -493,6 +623,13 @@ def main():
             print("    %-9s %-4s %-10s %s" % (r["project"], r["bug"], r["mode"],
                                               r["log_diff_fields"]))
 
+    cdiffs = [r for r in compared if r["counter_diff_fields"]]
+    if cdiffs:
+        print("  counter diffs (report-only, up to %d):" % args.show)
+        for r in cdiffs[:args.show]:
+            print("    %-9s %-4s %-10s %s" % (r["project"], r["bug"], r["mode"],
+                                              r["counter_diff_fields"]))
+
     if args.csv and rows:
         with open(args.csv, "w", newline="") as fd:
             w = csv.DictWriter(fd, fieldnames=list(rows[0].keys()))
@@ -522,6 +659,14 @@ def main():
                 "log_susp": {"compared": ls_d, "identical": ls_m, "differ": ls_d - ls_m, "rate": rate(ls_m, ls_d)},
                 "log_fail_tests": {"compared": lf_d, "identical": lf_m, "differ": lf_d - lf_m, "rate": rate(lf_m, lf_d)},
             },
+            "counters": {
+                k: {"compared": d, "identical": m, "differ": d - m, "rate": rate(m, d)}
+                for k, (m, d) in (("valfail", log_rate("valfail_state")),
+                                  ("validation", log_rate("validation_state")))
+            },
+            "tmax2_ratio": ({"n": len(ratios), "median": round(ratios[len(ratios) // 2], 3),
+                             "min": round(ratios[0], 3), "max": round(ratios[-1], 3)}
+                            if ratios else None),
             "classifications": counts,
             "tags": {
                 "mismatches": len(bad),

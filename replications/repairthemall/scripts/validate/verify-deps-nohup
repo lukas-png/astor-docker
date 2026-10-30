@@ -2,7 +2,7 @@
 # verify-deps-nohup [verify-deps args...]
 #
 # Detach scripts/validate/verify-deps into the background (one container dry-run
-# per reference bug, ~15-40 s each -- 1-2 h for the full set). NOT resumable:
+# per reference bug, ~25-40 s each -- 2.5-4.5 h for the 395 bugs of the full set). NOT resumable:
 # re-running starts over from the first bug.
 #
 #   scripts/validate/verify-deps-nohup --csv ~/verify-deps.csv
